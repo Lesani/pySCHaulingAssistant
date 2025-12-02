@@ -76,10 +76,10 @@ class WelcomeDialog(QDialog):
         self.ship_combo = QComboBox()
         self.ship_combo.setMinimumHeight(35)
 
-        # Sort ships by capacity and add to combo
+        # Sort ships alphabetically by display name
         ships_sorted = sorted(
             SHIP_PROFILES.items(),
-            key=lambda x: x[1].cargo_capacity_scu
+            key=lambda x: x[1].display_name
         )
 
         for ship_key, ship in ships_sorted:
@@ -98,9 +98,10 @@ class WelcomeDialog(QDialog):
 
         layout.addWidget(ship_group)
 
-        # Session choice group
-        session_group = QGroupBox("Session")
-        session_layout = QVBoxLayout(session_group)
+        # Session choice section (no group box for cleaner look)
+        session_label = QLabel("Session")
+        session_label.setStyleSheet("font-weight: bold; font-size: 13px; margin-top: 10px;")
+        layout.addWidget(session_label)
 
         self.session_button_group = QButtonGroup(self)
 
@@ -108,32 +109,30 @@ class WelcomeDialog(QDialog):
         self.continue_radio = QRadioButton("Continue previous session")
         self.continue_radio.setChecked(True)
         self.session_button_group.addButton(self.continue_radio, 0)
-        session_layout.addWidget(self.continue_radio)
+        layout.addWidget(self.continue_radio)
 
         # Continue description
         if self.has_active_missions:
             continue_desc = QLabel("Resume with your existing missions and route")
         else:
             continue_desc = QLabel("No active missions found")
-        continue_desc.setStyleSheet("color: #888; font-size: 11px; margin-left: 25px; margin-bottom: 10px;")
-        session_layout.addWidget(continue_desc)
+        continue_desc.setStyleSheet("color: #888; font-size: 11px; margin-left: 26px; margin-bottom: 8px;")
+        layout.addWidget(continue_desc)
 
         # Fresh start option
         self.fresh_radio = QRadioButton("Start fresh")
         self.session_button_group.addButton(self.fresh_radio, 1)
-        session_layout.addWidget(self.fresh_radio)
+        layout.addWidget(self.fresh_radio)
 
         # Fresh description
         fresh_desc = QLabel("Clear all missions and start a new hauling session")
-        fresh_desc.setStyleSheet("color: #888; font-size: 11px; margin-left: 25px;")
-        session_layout.addWidget(fresh_desc)
+        fresh_desc.setStyleSheet("color: #888; font-size: 11px; margin-left: 26px;")
+        layout.addWidget(fresh_desc)
 
         # If no active missions, select fresh by default
         if not self.has_active_missions:
             self.fresh_radio.setChecked(True)
             self.continue_radio.setEnabled(False)
-
-        layout.addWidget(session_group)
 
         # Spacer
         layout.addStretch()
