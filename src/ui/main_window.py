@@ -19,6 +19,7 @@ from src.location_autocomplete import LocationMatcher
 from src.cargo_autocomplete import CargoMatcher
 from src.global_hotkeys import GlobalHotkeyManager
 from src.discord_auth import DiscordAuth
+from src.sound_service import init_sound_service
 from src.logger import get_logger
 
 # Import tabs (will be created)
@@ -48,6 +49,10 @@ class MainWindow(QMainWindow):
         self.scan_db = MissionScanDB()
         self.location_matcher = LocationMatcher()
         self.cargo_matcher = CargoMatcher()
+
+        # Initialize sound service with config setting
+        sounds_enabled = config.get("sounds", "enabled", default=True)
+        self.sound_service = init_sound_service(enabled=sounds_enabled)
 
         # Discord authentication
         self.discord_auth = DiscordAuth(config)

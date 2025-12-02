@@ -23,6 +23,7 @@ from src.location_autocomplete import LocationMatcher
 from src.cargo_autocomplete import CargoMatcher
 from src.ui.region_selector import RegionSelector
 from src.ui.validation_form import ValidationForm
+from src.sound_service import get_sound_service
 from src.logger import get_logger
 
 logger = get_logger()
@@ -366,9 +367,11 @@ class CaptureTab(QWidget):
                 loc_str = f" at {scan_location}" if scan_location else ""
                 self.status_message.emit(f"Mission data extracted{loc_str} - Review and save below", 5000)
                 logger.info("Mission data extracted successfully")
+                get_sound_service().play_scan_success()
             else:
                 error_msg = result.get("error", "Unknown error")
                 self.status_message.emit("Extraction failed", 5000)
+                get_sound_service().play_scan_fail()
                 QMessageBox.critical(
                     self,
                     "Extraction Error",
@@ -380,6 +383,7 @@ class CaptureTab(QWidget):
             logger.error(f"Extraction failed: {e}")
             self.capture_btn.setEnabled(True)
             self.status_message.emit("Extraction failed", 5000)
+            get_sound_service().play_scan_fail()
             QMessageBox.critical(
                 self,
                 "Extraction Error",
@@ -624,3 +628,4 @@ class CaptureTab(QWidget):
         self.location_warning_label.show()
         self.parse_anyway_btn.show()
         self.status_message.emit("Select a location or click 'Parse Anyway' to scan without location", 0)
+        get_sound_service().play_no_location()

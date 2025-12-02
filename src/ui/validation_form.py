@@ -17,6 +17,7 @@ from src.location_autocomplete import LocationMatcher
 from src.cargo_autocomplete import CargoMatcher
 from src.domain.models import Mission, Objective
 from src.services.mission_synergy_analyzer import MissionSynergyAnalyzer, SynergyMetrics
+from src.sound_service import get_sound_service
 from src.logger import get_logger
 
 logger = get_logger()
@@ -502,6 +503,7 @@ class ValidationForm(QWidget):
         # Emit signal
         self.mission_saved.emit(mission_data)
         logger.info("Mission validated and saved")
+        get_sound_service().play_mission_added()
 
     def _analyze_synergy(self, mission_data: dict):
         """Analyze synergy with active missions and update display."""
