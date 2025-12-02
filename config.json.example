@@ -1,0 +1,80 @@
+{
+  "api": {
+    "provider": "openrouter",
+    "anthropic": {
+      "base_url": "https://api.anthropic.com/v1/messages",
+      "default_model": "claude-sonnet-4-5",
+      "api_version": "2023-06-01"
+    },
+    "openrouter": {
+      "base_url": "https://openrouter.ai/api/v1/chat/completions",
+      "default_model": "qwen/qwen3-vl-8b-instruct"
+    },
+    "max_tokens": 1024
+  },
+  "ui": {
+    "canvas_height": 400,
+    "window_title": "SC Hauling Assistant",
+    "auto_switch_to_hauling": false
+  },
+  "image": {
+    "default_brightness": 1.0,
+    "default_contrast": 1.0,
+    "default_gamma": 1.0,
+    "slider_min": 0.1,
+    "slider_max": 3.0
+  },
+  "prompts": {
+    "mission_analysis": "Identify the objectives of the star citizen mission in this image."
+  },
+  "capture": {
+    "saved_region": null,
+    "last_region": null,
+    "default_brightness": 0,
+    "default_contrast": 0,
+    "default_gamma": 100
+  },
+  "hauling": {
+    "last_sort": "details",
+    "last_group": "none",
+    "show_route_suggestions": true,
+    "auto_switch_to_hauling_tab": true,
+    "sort_ascending": true
+  },
+  "route_planner": {
+    "selected_ship": "CRUSADER_C2_HERCULES",
+    "optimization_level": "medium",
+    "ship_capacity": 696,
+    "algorithm": "Dynamic (Regret-2 + ALNS)"
+  },
+  "synergy": {
+    "enabled": true,
+    "capacity_warning_threshold": 80,
+    "low_synergy_threshold": 30,
+    "show_recommendations": true,
+    "check_timing": true,
+    "show_route_preview": true
+  },
+  "ui_theme": {
+    "mode": "dark"
+  },
+  "hotkeys": {
+    "enabled": true,
+    "capture": {
+      "modifiers": ["shift"],
+      "key": "f11",
+      "description": "Capture & extract mission from screen"
+    },
+    "save": {
+      "modifiers": ["shift"],
+      "key": "f12",
+      "description": "Add mission to hauling list"
+    }
+  },
+  "sync": {
+    "api_url": "https://your-sync-server.example.com",
+    "api_key": "",
+    "username": "",
+    "last_sync": null
+  }
+}

@@ -71,3 +71,24 @@ desktop.ini
 *apikey*
 *.pem
 *.key
+
+# Mission data (user-specific)
+missions.json
+mission_scans.json
+
+# Application logs
+logs/
+app_output.log
+
+# Backup files
+backups/
+
+# User configuration (contains personal settings)
+config.json
+
+# Node.js
+node_modules/
+.wrangler/
+
+# Test files
+test_*.py

@@ -1,0 +1,222 @@
+{
+  "planets": [
+    "Arccorp",
+    "Crusader",
+    "Hurston",
+    "Microtech"
+  ],
+  "stations": {
+    "Stations": [
+      "Grimm Hex",
+      "Baijini Point above ArcCorp",
+      "Everus Harbor above Hurston",
+      "Seraphim Station above Crusader",
+      "Port Tressler above microTech",
+      "Pyro Gateway",
+      "Nyx Gateway"
+    ],
+    "Lagrange Stations": [
+      "ARC-L1 Wide Forest Station",
+      "ARC-L2 Lively Pathway Station",
+      "ARC-L3 Modern Express Station",
+      "ARC-L4 Faint Glen Station",
+      "ARC-L5 Yellow Core Station",
+      "CRU-L1 Ambitious Dream Station",
+      "CRU-L4 Shallow Fields Station",
+      "CRU-L5 Beautiful Glen Station",
+      "HUR-L1 Green Glade Station",
+      "HUR-L2 Faithful Dream Station",
+      "HUR-L3 Thundering Express Station",
+      "HUR-L4 Melodic Fields Station",
+      "HUR-L5 High Course Station",
+      "MIC-L1 Shallow Frontier Station",
+      "MIC-L2 Long Forest Station",
+      "MIC-L3 Endless Odyssey Station",
+      "MIC-L4 Red Crossroads Station",
+      "MIC-L5 Modern Icarus Station"
+    ],
+    "Distribution Centers": [
+      "Covalex Distribution Centre S4DC05",
+      "Greycat Stanton IV Production Complex-A",
+      "Sakura Sun Goldenrod Workcenter",
+      "microTech Logistics Depot S4LD01",
+      "microTech Logistics Depot S4LD13",
+      "Shubin Mining Facility SM0-10",
+      "Shubin Mining Facility SM0-13",
+      "Shubin Mining Facility SM0-18",
+      "Shubin Mining Facility SM0-22",
+      "Covalex Distribution Centre S1DC06",
+      "Greycat Stanton 1 Production Complex-B",
+      "HDPC-Cassillo",
+      "HDPC-Farnesway",
+      "Sakura Sun Magnolia Workcenter"
+    ],
+    "Outposts": [
+      "Humboldt Mine",
+      "Loveridge Mineral Reserve",
+      "Shubin Mining Facility SAL-2",
+      "Shubin Mining Facility SAL-5"
+    ]
+  },
+  "dropoffpoints": {
+    "Arccorp": {
+      "City": ["Area 18"]
+    },
+    "Crusader": {
+      "City": ["Orison"]
+    },
+    "Hurston": {
+      "City": [
+        "Lorville",
+        "Riker Memorial Spaceport",
+        "Teasa Spaceport"
+      ],
+      "Distribution Center": [
+        "Covalex Distribution Centre S1DC06",
+        "Greycat Stanton 1 Production Complex-B",
+        "HDPC-Cassillo",
+        "HDPC-Farnesway",
+        "Sakura Sun Magnolia Workcenter"
+      ],
+      "Outpost": [
+        "HDMS-Oparei",
+        "HDMS-Edmond",
+        "HDMS-Hadley",
+        "HDMS-Thedus",
+        "HDMS-Stanhope",
+        "HDMS-Pinewood"
+      ]
+    },
+    "Microtech": {
+      "City": ["NB Int Spaceport"],
+      "Distribution Center": [
+        "Covalex Distribution Center S4DC05",
+        "Greycat Stanton IV Production Complex-A",
+        "Sakura Sun Goldenrod Workcenter",
+        "microTech Logistics Depot S4LD01",
+        "microTech Logistics Depot S4LD13",
+        "Shubin Mining Facility SM0-10",
+        "Shubin Mining Facility SM0-13",
+        "Shubin Mining Facility SM0-18",
+        "Shubin Mining Facility SM0-22"
+      ],
+      "Outpost": [
+        "Rayari Deltana Research Outpost",
+        "Rayari Anvik Research Outpost",
+        "Rayari Kaltag Research Outpost",
+        "Shubin Mining Facility SMCa-6",
+        "Shubin Mining Facility SMCa-8"
+      ]
+    }
+  },
+  "moons": {
+    "Arccorp": {
+      "Lyria": {
+        "Outpost": [
+          "Humboldt Mine",
+          "Loveridge Mineral Reserve",
+          "Shubin Mining Facility SAL-2",
+          "Shubin Mining Facility SAL-5"
+        ]
+      },
+      "Wala": {
+        "Outpost": [
+          "ArcCorp Mining Area 045",
+          "ArcCorp Mining Area 048",
+          "ArcCorp Mining Area 056",
+          "ArcCorp Mining Area 061"
+        ],
+        "Scrapyard": ["Samson & Sons Salvage Center"],
+        "Farming Outpost": ["Shady Glen Farms"]
+      }
+    },
+    "Crusader": {
+      "Cellin": {
+        "Outpost": [
+          "Gallee Family Farms",
+          "Hickes Research Outpost",
+          "Terra Mills Hydrofarm",
+          "Tram & Myers Mining"
+        ]
+      },
+      "Daymar": {
+        "Outpost": [
+          "ArcCorp Mining Area 141",
+          "Bountiful Harvest Hydroponics",
+          "Kudre Ore",
+          "Shubin Mining Facility SCD-1",
+          "Brios Breaker Yard"
+        ]
+      },
+      "Yela": {
+        "Outpost": [
+          "ArcCorp Mining Area 157",
+          "Benson Mining Outpost",
+          "Deakins Research Outpost"
+        ]
+      }
+    },
+    "Hurston": {
+      "Arial": {
+        "Outpost": ["HDMS-Bezdek", "HDMS-Lathan"]
+      },
+      "Aberdeen": {
+        "Outpost": ["HDMS-Anderson", "HDMS-Norgaard"]
+      },
+      "Ita": {
+        "Outpost": ["HDMS-Ryder", "HDMS-Woodruff"]
+      },
+      "Magda": {
+        "Outpost": ["HDMS-Hahn", "HDMS-Perlman"]
+      }
+    },
+    "Microtech": {
+      "Calliope": {
+        "Outpost": [
+          "Rayari Anvik Research Outpost",
+          "Rayari Kaltag Research Outpost",
+          "Shubin Mining Facility SMCa-6",
+          "Shubin Mining Facility SMCa-8"
+        ]
+      },
+      "Clio": {
+        "Outpost": [
+          "Rayari Cantwell Research Outpost",
+          "Rayari McGrath Research Outpost"
+        ]
+      },
+      "Euterpe": {
+        "Outpost": ["Devlin Scrap & Salvage"]
+      }
+    }
+  },
+  "commodities": [
+    "Aluminum",
+    "Carbon",
+    "Corundum",
+    "Processed Food",
+    "Pressurized Ice",
+    "Agricultural Supplies",
+    "Quartz",
+    "Iron",
+    "Silicon",
+    "Stims",
+    "Tin",
+    "Titanium",
+    "Tungsten",
+    "Hydrogen",
+    "Hydrogen Fuel",
+    "Quantum Fuel",
+    "Ship Ammunition",
+    "Scrap",
+    "Waste",
+    "Corundum Raw",
+    "Iron Raw",
+    "Iron Ore",
+    "Quartz Raw",
+    "Silicon Raw",
+    "Tin Raw",
+    "Titanium Raw",
+    "Tungsten Raw"
+  ]
+}

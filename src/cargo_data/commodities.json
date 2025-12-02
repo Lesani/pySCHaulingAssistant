@@ -1,0 +1,92 @@
+{
+  "categories": {
+    "Medical": [
+      "Medical Supplies",
+      "Stims",
+      "Medpens",
+      "Pharmaceuticals",
+      "Medical Equipment"
+    ],
+    "Agricultural": [
+      "Agricultural Supplies",
+      "Distilled Spirits",
+      "Processed Food",
+      "Grain",
+      "Wheat",
+      "Corn",
+      "Flour",
+      "Livestock",
+      "Organic Materials"
+    ],
+    "Minerals": [
+      "Agricium",
+      "Aluminum",
+      "Beryl",
+      "Bexalite",
+      "Borase",
+      "Copper",
+      "Corundum",
+      "Diamond",
+      "Gold",
+      "Hephaestanite",
+      "Laranite",
+      "Quantainium",
+      "Quartz",
+      "Taranite",
+      "Titanium",
+      "Tungsten"
+    ],
+    "Gases": [
+      "Hydrogen",
+      "Quantanium Gas"
+    ],
+    "Metals": [
+      "Refined Aluminum",
+      "Refined Copper",
+      "Refined Gold",
+      "Refined Titanium",
+      "Steel",
+      "Tungsten Carbide"
+    ],
+    "Consumer_Goods": [
+      "Consumer Goods",
+      "Luxury Goods",
+      "Luxury Clothing",
+      "Luxury Food",
+      "Personal Weapons",
+      "Souvenirs"
+    ],
+    "Industrial": [
+      "Construction Materials",
+      "Mining Equipment",
+      "Ship Components",
+      "Industrial Supplies",
+      "Machinery"
+    ],
+    "Chemicals": [
+      "Chlorine",
+      "Fluorine",
+      "Iodine",
+      "Astatine"
+    ],
+    "Waste": [
+      "Waste",
+      "Scrap",
+      "Recyclable Material"
+    ],
+    "Illegal": [
+      "Maze",
+      "Neon",
+      "Widow",
+      "E'tam",
+      "Altruciatoxin",
+      "Revenant Tree Pollen"
+    ],
+    "Other": [
+      "Cargo",
+      "Unknown",
+      "Packages",
+      "Containers"
+    ]
+  }
+}

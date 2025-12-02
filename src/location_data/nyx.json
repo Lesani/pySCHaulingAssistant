@@ -1,0 +1,16 @@
+{
+  "planets": [
+    "Delamar"
+  ],
+  "stations": {
+    "Stations": [
+      "Stanton Gateway",
+      "Pyro Gateway"
+    ]
+  },
+  "dropoffpoints": {
+    "Delamar": {
+      "City": ["Levski"]
+    }
+  }
+}

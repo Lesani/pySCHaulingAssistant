@@ -1,0 +1,27 @@
+# SC Hauling Assistant - Cloudflare Worker Configuration
+
+name = "sc-hauling-sync"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# Custom domain route
+routes = [
+  { pattern = "your-sync-server.example.com", custom_domain = true }
+]
+
+# D1 Database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "sc-hauling-db"
+database_id = "e60521b6-9e9d-4d28-941f-a0b1a3bbce4f"
+
+# Optional: API key for authentication (leave empty for open access)
+# Set this in Cloudflare dashboard or uncomment below
+# [vars]
+# API_KEY = "your-secret-key-here"
+
+# Discord OAuth2 configuration
+# DISCORD_CLIENT_ID should be set as a variable (not secret - it's public)
+# DISCORD_CLIENT_SECRET should be set as a secret via: wrangler secret put DISCORD_CLIENT_SECRET
+[vars]
+DISCORD_CLIENT_ID = "1445206968250794014"

@@ -1,0 +1,665 @@
+"""
+Configuration tab for PyQt6.
+
+Settings for API provider, model selection, and application preferences.
+"""
+
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
+    QLineEdit, QComboBox, QSpinBox, QCheckBox, QPushButton,
+    QLabel, QMessageBox
+)
+from PyQt6.QtCore import pyqtSignal
+import os
+from typing import Optional, TYPE_CHECKING
+
+from src.config import Config
+from src.logger import get_logger
+
+if TYPE_CHECKING:
+    from src.discord_auth import DiscordAuth
+
+logger = get_logger()
+
+
+class ConfigTab(QWidget):
+    """Configuration settings tab."""
+
+    config_saved = pyqtSignal()  # Emitted when config is saved
+    discord_login_requested = pyqtSignal()  # Emitted when user wants to login
+    discord_logout_requested = pyqtSignal()  # Emitted when user wants to logout
+
+    def __init__(self, config: Config, discord_auth: Optional["DiscordAuth"] = None):
+        super().__init__()
+
+        self.config = config
+        self.discord_auth = discord_auth
+
+        self._setup_ui()
+        self._load_settings()
+        self._update_discord_status()
+
+    def _setup_ui(self):
+        """Setup the configuration UI."""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        # API Settings Group
+        api_group = QGroupBox("API Settings")
+        api_layout = QFormLayout()
+
+        # Provider selection
+        self.provider_combo = QComboBox()
+        self.provider_combo.addItems(["Anthropic", "OpenRouter"])
+        self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
+        api_layout.addRow("Provider:", self.provider_combo)
+
+        # API Key
+        self.api_key_edit = QLineEdit()
+        self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key_edit.setPlaceholderText("Enter API key or set environment variable")
+
+        # Show/hide button
+        api_key_layout = QHBoxLayout()
+        api_key_layout.addWidget(self.api_key_edit)
+
+        self.show_key_btn = QPushButton("Show")
+        self.show_key_btn.setMaximumWidth(60)
+        self.show_key_btn.setProperty("class", "secondary")
+        self.show_key_btn.clicked.connect(self._toggle_key_visibility)
+        api_key_layout.addWidget(self.show_key_btn)
+
+        api_layout.addRow("API Key:", api_key_layout)
+
+        # Environment variable hint
+        self.env_var_label = QLabel()
+        self.env_var_label.setProperty("class", "muted")
+        self.env_var_label.setWordWrap(True)
+        api_layout.addRow("", self.env_var_label)
+
+        # Model selection
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        api_layout.addRow("Model:", self.model_combo)
+
+        # Max tokens
+        self.max_tokens_spin = QSpinBox()
+        self.max_tokens_spin.setRange(100, 16000)
+        self.max_tokens_spin.setValue(1024)
+        api_layout.addRow("Max Tokens:", self.max_tokens_spin)
+
+        api_group.setLayout(api_layout)
+        layout.addWidget(api_group)
+
+        # UI Settings Group
+        ui_group = QGroupBox("UI Settings")
+        ui_layout = QFormLayout()
+
+        # Auto-switch to hauling tab
+        self.auto_switch_check = QCheckBox("Automatically switch to Hauling tab after saving mission")
+        self.auto_switch_check.setChecked(True)
+        ui_layout.addRow(self.auto_switch_check)
+
+        # Canvas height
+        self.canvas_height_spin = QSpinBox()
+        self.canvas_height_spin.setRange(200, 800)
+        self.canvas_height_spin.setValue(400)
+        ui_layout.addRow("Preview Height:", self.canvas_height_spin)
+
+        ui_group.setLayout(ui_layout)
+        layout.addWidget(ui_group)
+
+        # Capture Settings Group
+        capture_group = QGroupBox("Image Capture Settings")
+        capture_layout = QFormLayout()
+
+        # Default brightness range
+        self.brightness_spin = QSpinBox()
+        self.brightness_spin.setRange(-100, 100)
+        self.brightness_spin.setValue(0)
+        capture_layout.addRow("Default Brightness:", self.brightness_spin)
+
+        # Default contrast range
+        self.contrast_spin = QSpinBox()
+        self.contrast_spin.setRange(-100, 100)
+        self.contrast_spin.setValue(0)
+        capture_layout.addRow("Default Contrast:", self.contrast_spin)
+
+        # Default gamma
+        self.gamma_spin = QSpinBox()
+        self.gamma_spin.setRange(50, 200)
+        self.gamma_spin.setValue(100)
+        capture_layout.addRow("Default Gamma (×100):", self.gamma_spin)
+
+        capture_group.setLayout(capture_layout)
+        layout.addWidget(capture_group)
+
+        # Global Hotkeys Group
+        hotkeys_group = QGroupBox("Global Hotkeys (System-wide)")
+        hotkeys_layout = QFormLayout()
+
+        # Enable hotkeys checkbox
+        self.hotkeys_enabled_check = QCheckBox("Enable global hotkeys")
+        self.hotkeys_enabled_check.setChecked(True)
+        hotkeys_layout.addRow(self.hotkeys_enabled_check)
+
+        # Info label
+        info_label = QLabel("These shortcuts work even when the game window is focused.")
+        info_label.setProperty("class", "muted")
+        info_label.setWordWrap(True)
+        hotkeys_layout.addRow(info_label)
+
+        # Capture hotkey
+        capture_hotkey_layout = QHBoxLayout()
+        self.capture_modifier_combo = QComboBox()
+        self.capture_modifier_combo.addItems(["Shift", "Ctrl", "Alt", "Shift+Ctrl", "Shift+Alt", "Ctrl+Alt"])
+        capture_hotkey_layout.addWidget(self.capture_modifier_combo)
+        capture_hotkey_layout.addWidget(QLabel("+"))
+        self.capture_key_combo = QComboBox()
+        self.capture_key_combo.addItems([
+            "Print Screen", "Enter", "Space", "F1", "F2", "F3", "F4",
+            "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"
+        ])
+        capture_hotkey_layout.addWidget(self.capture_key_combo)
+        hotkeys_layout.addRow("Capture & Extract:", capture_hotkey_layout)
+
+        # Save hotkey
+        save_hotkey_layout = QHBoxLayout()
+        self.save_modifier_combo = QComboBox()
+        self.save_modifier_combo.addItems(["Shift", "Ctrl", "Alt", "Shift+Ctrl", "Shift+Alt", "Ctrl+Alt"])
+        save_hotkey_layout.addWidget(self.save_modifier_combo)
+        save_hotkey_layout.addWidget(QLabel("+"))
+        self.save_key_combo = QComboBox()
+        self.save_key_combo.addItems([
+            "Enter", "Space", "Print Screen", "F1", "F2", "F3", "F4",
+            "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"
+        ])
+        save_hotkey_layout.addWidget(self.save_key_combo)
+        hotkeys_layout.addRow("Add to List:", save_hotkey_layout)
+
+        hotkeys_group.setLayout(hotkeys_layout)
+        layout.addWidget(hotkeys_group)
+
+        # Cloud Sync Settings Group
+        sync_group = QGroupBox("Cloud Sync Settings")
+        sync_layout = QFormLayout()
+
+        # Info label
+        sync_info_label = QLabel(
+            "Sync your scanned missions with an online database to share with friends.\n"
+            "Login with Discord to authenticate and sync."
+        )
+        sync_info_label.setProperty("class", "muted")
+        sync_info_label.setWordWrap(True)
+        sync_layout.addRow(sync_info_label)
+
+        # API URL
+        self.sync_url_edit = QLineEdit()
+        self.sync_url_edit.setPlaceholderText("https://your-sync-server.example.com")
+        sync_layout.addRow("Sync API URL:", self.sync_url_edit)
+
+        # Discord Authentication section
+        auth_layout = QHBoxLayout()
+
+        # Status label (shows logged in username or "Not logged in")
+        self.discord_status_label = QLabel("Not logged in")
+        self.discord_status_label.setMinimumWidth(150)
+        auth_layout.addWidget(self.discord_status_label)
+
+        # Login button
+        self.discord_login_btn = QPushButton("Login with Discord")
+        self.discord_login_btn.clicked.connect(self._on_discord_login_clicked)
+        auth_layout.addWidget(self.discord_login_btn)
+
+        # Logout button (hidden when not logged in)
+        self.discord_logout_btn = QPushButton("Logout")
+        self.discord_logout_btn.setProperty("class", "secondary")
+        self.discord_logout_btn.clicked.connect(self._on_discord_logout_clicked)
+        self.discord_logout_btn.hide()
+        auth_layout.addWidget(self.discord_logout_btn)
+
+        auth_layout.addStretch()
+        sync_layout.addRow("Authentication:", auth_layout)
+
+        # Test connection button
+        test_btn_layout = QHBoxLayout()
+        self.test_sync_btn = QPushButton("Test Connection")
+        self.test_sync_btn.setProperty("class", "secondary")
+        self.test_sync_btn.clicked.connect(self._test_sync_connection)
+        test_btn_layout.addWidget(self.test_sync_btn)
+        test_btn_layout.addStretch()
+        sync_layout.addRow("", test_btn_layout)
+
+        sync_group.setLayout(sync_layout)
+        layout.addWidget(sync_group)
+
+        layout.addStretch()
+
+        # Action buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        reset_btn = QPushButton("Reset to Defaults")
+        reset_btn.setProperty("class", "secondary")
+        reset_btn.clicked.connect(self._reset_to_defaults)
+        button_layout.addWidget(reset_btn)
+
+        save_btn = QPushButton("Save Configuration")
+        save_btn.clicked.connect(self._save_config)
+        button_layout.addWidget(save_btn)
+
+        layout.addLayout(button_layout)
+
+    def _load_settings(self):
+        """Load current settings into the form."""
+        # API settings
+        provider = self.config.get("api", "provider", default="anthropic")
+        # Find and select provider (case-insensitive)
+        for i in range(self.provider_combo.count()):
+            if self.provider_combo.itemText(i).lower() == provider.lower():
+                self.provider_combo.setCurrentIndex(i)
+                break
+
+        # Load API key from config or environment
+        api_key = self.config.get_api_key()
+        if api_key:
+            self.api_key_edit.setText(api_key)
+
+        # Model - load from provider-specific config
+        model = self.config.get("api", provider, "default_model", default="claude-sonnet-4-5")
+        self.model_combo.setCurrentText(model)
+
+        # Max tokens
+        max_tokens = self.config.get("api", "max_tokens", default=1024)
+        self.max_tokens_spin.setValue(max_tokens)
+
+        # UI settings
+        auto_switch = self.config.get("ui", "auto_switch_to_hauling", default=True)
+        self.auto_switch_check.setChecked(auto_switch)
+
+        canvas_height = self.config.get("ui", "canvas_height", default=400)
+        self.canvas_height_spin.setValue(canvas_height)
+
+        # Capture settings
+        brightness = self.config.get("capture", "default_brightness", default=0)
+        self.brightness_spin.setValue(brightness)
+
+        contrast = self.config.get("capture", "default_contrast", default=0)
+        self.contrast_spin.setValue(contrast)
+
+        gamma = self.config.get("capture", "default_gamma", default=100)
+        self.gamma_spin.setValue(gamma)
+
+        # Hotkey settings
+        hotkeys_enabled = self.config.get("hotkeys", "enabled", default=True)
+        self.hotkeys_enabled_check.setChecked(hotkeys_enabled)
+
+        # Capture hotkey
+        capture_modifiers = self.config.get("hotkeys", "capture", "modifiers", default=["shift"])
+        capture_key = self.config.get("hotkeys", "capture", "key", default="print_screen")
+        self._set_hotkey_combo(self.capture_modifier_combo, capture_modifiers)
+        self._set_key_combo(self.capture_key_combo, capture_key)
+
+        # Save hotkey
+        save_modifiers = self.config.get("hotkeys", "save", "modifiers", default=["shift"])
+        save_key = self.config.get("hotkeys", "save", "key", default="enter")
+        self._set_hotkey_combo(self.save_modifier_combo, save_modifiers)
+        self._set_key_combo(self.save_key_combo, save_key)
+
+        # Update model list based on provider (use display text from combo)
+        self._on_provider_changed(self.provider_combo.currentText())
+
+        # Sync settings
+        sync_url = self.config.get("sync", "api_url", default="https://your-sync-server.example.com")
+        self.sync_url_edit.setText(sync_url)
+
+        logger.debug("Configuration loaded")
+
+    def _set_hotkey_combo(self, combo: QComboBox, modifiers: list):
+        """Set the modifier combo box based on a list of modifiers."""
+        # Convert list to display string
+        if not modifiers:
+            combo.setCurrentText("Shift")
+            return
+
+        # Sort for consistent display
+        sorted_mods = sorted([m.capitalize() for m in modifiers])
+        display_text = "+".join(sorted_mods)
+
+        # Try to find exact match
+        for i in range(combo.count()):
+            if combo.itemText(i) == display_text:
+                combo.setCurrentIndex(i)
+                return
+
+        # Default to first item
+        combo.setCurrentIndex(0)
+
+    def _set_key_combo(self, combo: QComboBox, key: str):
+        """Set the key combo box based on a key string."""
+        # Convert internal key name to display name
+        key_map = {
+            "print_screen": "Print Screen",
+            "enter": "Enter",
+            "space": "Space",
+            "f1": "F1", "f2": "F2", "f3": "F3", "f4": "F4",
+            "f5": "F5", "f6": "F6", "f7": "F7", "f8": "F8",
+            "f9": "F9", "f10": "F10", "f11": "F11", "f12": "F12"
+        }
+
+        display_key = key_map.get(key.lower(), key.capitalize())
+
+        # Try to find match
+        for i in range(combo.count()):
+            if combo.itemText(i) == display_key:
+                combo.setCurrentIndex(i)
+                return
+
+        # Default to first item
+        combo.setCurrentIndex(0)
+
+    def _get_modifiers_list(self, display_text: str) -> list:
+        """Convert display text to list of modifier keys."""
+        # Split by + and convert to lowercase
+        return [mod.strip().lower() for mod in display_text.split("+")]
+
+    def _get_key_value(self, display_text: str) -> str:
+        """Convert display text to internal key value."""
+        # Convert display name to internal key name
+        key_map = {
+            "Print Screen": "print_screen",
+            "Enter": "enter",
+            "Space": "space",
+            "F1": "f1", "F2": "f2", "F3": "f3", "F4": "f4",
+            "F5": "f5", "F6": "f6", "F7": "f7", "F8": "f8",
+            "F9": "f9", "F10": "f10", "F11": "f11", "F12": "f12"
+        }
+
+        return key_map.get(display_text, display_text.lower())
+
+    def _on_provider_changed(self, provider: str):
+        """Handle provider selection change."""
+        provider_lower = provider.lower()
+
+        # Update model list
+        self.model_combo.clear()
+        if provider_lower == "anthropic":
+            self.model_combo.addItems([
+                "claude-sonnet-4-5",
+                "claude-3-5-sonnet-20241022",
+                "claude-3-5-sonnet-20240620",
+                "claude-3-opus-20240229",
+                "claude-3-haiku-20240307"
+            ])
+            self.env_var_label.setText("Set ANTHROPIC_API_KEY environment variable")
+
+            # Load saved model for this provider
+            saved_model = self.config.get("api", "anthropic", "default_model", default="claude-sonnet-4-5")
+            self.model_combo.setCurrentText(saved_model)
+        else:  # openrouter
+            self.model_combo.addItems([
+                "qwen/qwen3-vl-8b-instruct",
+                "anthropic/claude-3.5-sonnet",
+                "anthropic/claude-3-opus",
+                "openai/gpt-4-turbo",
+                "google/gemini-pro-1.5"
+            ])
+            self.env_var_label.setText("Set OPENROUTER_API_KEY environment variable")
+
+            # Load saved model for this provider
+            saved_model = self.config.get("api", "openrouter", "default_model", default="qwen/qwen3-vl-8b-instruct")
+            self.model_combo.setCurrentText(saved_model)
+
+    def _toggle_key_visibility(self):
+        """Toggle API key visibility."""
+        if self.api_key_edit.echoMode() == QLineEdit.EchoMode.Password:
+            self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.show_key_btn.setText("Hide")
+        else:
+            self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+            self.show_key_btn.setText("Show")
+
+    def _save_config(self):
+        """Save configuration to file."""
+        try:
+            # Update config
+            provider = self.provider_combo.currentText().lower()
+
+            if "api" not in self.config.settings:
+                self.config.settings["api"] = {}
+
+            self.config.settings["api"]["provider"] = provider
+
+            # Save model to provider-specific config
+            if provider not in self.config.settings["api"]:
+                self.config.settings["api"][provider] = {}
+
+            self.config.settings["api"][provider]["default_model"] = self.model_combo.currentText()
+            self.config.settings["api"]["max_tokens"] = self.max_tokens_spin.value()
+
+            # Note: We don't save API key to config file, only to environment
+            api_key = self.api_key_edit.text().strip()
+            if api_key:
+                env_var = "ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENROUTER_API_KEY"
+                os.environ[env_var] = api_key
+
+            # UI settings
+            if "ui" not in self.config.settings:
+                self.config.settings["ui"] = {}
+
+            auto_switch_value = self.auto_switch_check.isChecked()
+            self.config.settings["ui"]["auto_switch_to_hauling"] = auto_switch_value
+            self.config.settings["ui"]["canvas_height"] = self.canvas_height_spin.value()
+            logger.debug(f"Saving auto_switch_to_hauling: {auto_switch_value}")
+
+            # Capture settings
+            if "capture" not in self.config.settings:
+                self.config.settings["capture"] = {}
+
+            self.config.settings["capture"]["default_brightness"] = self.brightness_spin.value()
+            self.config.settings["capture"]["default_contrast"] = self.contrast_spin.value()
+            self.config.settings["capture"]["default_gamma"] = self.gamma_spin.value()
+
+            # Hotkey settings
+            if "hotkeys" not in self.config.settings:
+                self.config.settings["hotkeys"] = {}
+
+            self.config.settings["hotkeys"]["enabled"] = self.hotkeys_enabled_check.isChecked()
+
+            # Capture hotkey
+            capture_modifiers = self._get_modifiers_list(self.capture_modifier_combo.currentText())
+            capture_key = self._get_key_value(self.capture_key_combo.currentText())
+
+            if "capture" not in self.config.settings["hotkeys"]:
+                self.config.settings["hotkeys"]["capture"] = {}
+
+            self.config.settings["hotkeys"]["capture"]["modifiers"] = capture_modifiers
+            self.config.settings["hotkeys"]["capture"]["key"] = capture_key
+            self.config.settings["hotkeys"]["capture"]["description"] = "Capture & extract mission from screen"
+
+            # Save hotkey
+            save_modifiers = self._get_modifiers_list(self.save_modifier_combo.currentText())
+            save_key = self._get_key_value(self.save_key_combo.currentText())
+
+            if "save" not in self.config.settings["hotkeys"]:
+                self.config.settings["hotkeys"]["save"] = {}
+
+            self.config.settings["hotkeys"]["save"]["modifiers"] = save_modifiers
+            self.config.settings["hotkeys"]["save"]["key"] = save_key
+            self.config.settings["hotkeys"]["save"]["description"] = "Add mission to hauling list"
+
+            # Sync settings
+            if "sync" not in self.config.settings:
+                self.config.settings["sync"] = {}
+
+            self.config.settings["sync"]["api_url"] = self.sync_url_edit.text().strip() or "https://your-sync-server.example.com"
+
+            # Save to file
+            self.config.save()
+
+            # Emit signal
+            self.config_saved.emit()
+
+            QMessageBox.information(self, "Success", "Configuration saved successfully")
+            logger.info("Configuration saved")
+
+        except Exception as e:
+            logger.error(f"Failed to save config: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to save configuration:\n{str(e)}")
+
+    def _reset_to_defaults(self):
+        """Reset all settings to defaults."""
+        reply = QMessageBox.question(
+            self,
+            "Reset to Defaults",
+            "Are you sure you want to reset all settings to defaults?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            # Reset API settings
+            self.provider_combo.setCurrentText("Anthropic")
+            self.api_key_edit.clear()
+            self.model_combo.setCurrentText("claude-sonnet-4-5")
+            self.max_tokens_spin.setValue(1024)
+
+            # Reset UI settings
+            self.auto_switch_check.setChecked(True)
+            self.canvas_height_spin.setValue(400)
+
+            # Reset capture settings
+            self.brightness_spin.setValue(0)
+            self.contrast_spin.setValue(0)
+            self.gamma_spin.setValue(100)
+
+            # Reset hotkey settings
+            self.hotkeys_enabled_check.setChecked(True)
+            self.capture_modifier_combo.setCurrentText("Shift")
+            self.capture_key_combo.setCurrentText("Print Screen")
+            self.save_modifier_combo.setCurrentText("Shift")
+            self.save_key_combo.setCurrentText("Enter")
+
+            # Reset sync settings
+            self.sync_url_edit.setText("https://your-sync-server.example.com")
+
+            logger.info("Settings reset to defaults")
+
+    def _test_sync_connection(self):
+        """Test connection to the sync API."""
+        from src.sync_service import SyncService
+
+        url = self.sync_url_edit.text().strip()
+        if not url:
+            QMessageBox.warning(
+                self,
+                "No URL",
+                "Please enter a Sync API URL first."
+            )
+            return
+
+        # Temporarily update config for testing
+        if "sync" not in self.config.settings:
+            self.config.settings["sync"] = {}
+        self.config.settings["sync"]["api_url"] = url
+
+        sync_service = SyncService(self.config)
+
+        self.test_sync_btn.setEnabled(False)
+        self.test_sync_btn.setText("Testing...")
+
+        result = sync_service.test_connection()
+
+        self.test_sync_btn.setEnabled(True)
+        self.test_sync_btn.setText("Test Connection")
+
+        if result.get("success"):
+            # Also get stats
+            stats_result = sync_service.get_stats()
+            stats_msg = ""
+            if stats_result.get("success"):
+                stats = stats_result.get("stats", {})
+                stats_msg = f"\n\nDatabase stats:\n"
+                stats_msg += f"  Total scans: {stats.get('total_scans', 0)}\n"
+                stats_msg += f"  Last 24h: {stats.get('scans_last_24h', 0)}"
+
+            QMessageBox.information(
+                self,
+                "Connection Successful",
+                f"Successfully connected to sync server!{stats_msg}"
+            )
+        else:
+            QMessageBox.critical(
+                self,
+                "Connection Failed",
+                f"Could not connect to sync server:\n\n{result.get('error', 'Unknown error')}"
+            )
+
+    def _update_discord_status(self):
+        """Update the Discord login status display."""
+        if self.discord_auth and self.discord_auth.is_logged_in():
+            username = self.discord_auth.get_username() or "Unknown"
+            self.discord_status_label.setText(f"Logged in as: {username}")
+            self.discord_status_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
+            self.discord_login_btn.setVisible(False)
+            self.discord_logout_btn.setVisible(True)
+        else:
+            self.discord_status_label.setText("Not logged in")
+            self.discord_status_label.setStyleSheet("color: #888;")
+            self.discord_login_btn.setVisible(True)
+            self.discord_logout_btn.setVisible(False)
+
+    def _on_discord_login_clicked(self):
+        """Handle Discord login button click."""
+        if not self.discord_auth:
+            QMessageBox.warning(
+                self,
+                "Not Available",
+                "Discord authentication is not initialized."
+            )
+            return
+
+        self.discord_login_btn.setEnabled(False)
+        self.discord_login_btn.setText("Logging in...")
+
+        # Emit signal to let main window handle the actual login
+        self.discord_login_requested.emit()
+
+    def _on_discord_logout_clicked(self):
+        """Handle Discord logout button click."""
+        if not self.discord_auth:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Logout",
+            "Are you sure you want to logout from Discord?\n\n"
+            "You will need to login again to sync missions.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self.discord_logout_requested.emit()
+
+    def on_discord_login_complete(self, success: bool, message: str):
+        """Called when Discord login completes."""
+        self.discord_login_btn.setEnabled(True)
+        self.discord_login_btn.setText("Login with Discord")
+
+        if success:
+            self._update_discord_status()
+        else:
+            QMessageBox.warning(
+                self,
+                "Login Failed",
+                f"Could not login with Discord:\n\n{message}"
+            )
+
+    def on_discord_logout_complete(self):
+        """Called when Discord logout completes."""
+        self._update_discord_status()
+
+    def set_discord_auth(self, discord_auth: "DiscordAuth"):
+        """Set the Discord auth instance and update status."""
+        self.discord_auth = discord_auth
+        self._update_discord_status()

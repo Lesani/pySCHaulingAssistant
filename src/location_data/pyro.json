@@ -1,0 +1,68 @@
+{
+  "planets": [
+    "Pyro 1",
+    "Monox",
+    "Bloom",
+    "Pyro IV",
+    "Pyro V",
+    "Terminus"
+  ],
+  "moons": [
+    "Ignis",
+    "Vatra",
+    "Adir",
+    "Fairo",
+    "Fuego",
+    "Vuur"
+  ],
+  "stations": [
+    "Ruin Station",
+    "Orbituary",
+    "Patch City",
+    "Starlight Service Station",
+    "Checkmate",
+    "Rods Fuel N Supplies",
+    "Endgame",
+    "Dudley & Daughters",
+    "Rats Net",
+    "Megumi Refueling",
+    "Gaslight"
+  ],
+  "dropoffpoints": {
+    "Pyro 1": {
+      "Outposts": ["Stags Rut"],
+      "Salvage Yards": ["Rsutville"]
+    },
+    "Monox": {
+      "Outposts": ["Arid Reach", "Jacksons Swap"],
+      "Mining Outposts": ["Yangs Place", "Ostlers Claim", "Last Ditch"],
+      "Salvage Yards": ["Sunset Mesa"]
+    },
+    "Bloom": {
+      "Outposts": ["Narenas Rest", "The Golden Riviera", "Frigid Knot", "ShadowFall"],
+      "Salvage Yards": ["Windfall"],
+      "Farming Outposts": ["The Yard", "Shepherds Rest"],
+      "Mining Outposts": ["Cravers Ridge", "Bueno Ravine"]
+    },
+    "Pyro IV": {
+      "Outposts": ["Fallow Field", "Goners Deal", "Sacrens Plot"],
+      "Salvage Yards": ["Chawlas Breach"]
+    },
+    "Terminus": {
+      "Outposts": ["Rough Landing", "Blackrock Exchange", "Canard View", "Stonetree"],
+      "Farming Outposts": ["Scrapers Turn", "Bullocks Reach", "Kinder Plots"],
+      "Salvage Yards": ["Last Landings"]
+    },
+    "Pyro V": {
+      "Ignis": {
+        "Outposts": ["Ashland", "Kabirs Post"]
+      },
+      "Vatra": {
+        "Salvage Yards": ["Seers Canyon"]
+      },
+      "Adir": {
+        "Outposts": ["Prophets Peak"]
+      }
+    }
+  }
+}
