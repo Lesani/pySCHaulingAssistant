@@ -26,7 +26,7 @@ class SyncService:
 
     def _get_api_url(self) -> str:
         """Get the sync API URL from config."""
-        return self.config.get("sync", "api_url", default="https://your-sync-server.example.com")
+        return self.config.get("sync", "api_url", default="")
 
     def _get_api_key(self) -> str:
         """Get the sync API key from config (legacy, prefer Discord auth)."""

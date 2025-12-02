@@ -139,7 +139,7 @@ class DiscordAuth:
 
     def get_api_url(self) -> str:
         """Get the sync API base URL."""
-        return self.config.get("sync", "api_url", default="https://your-sync-server.example.com")
+        return self.config.get("sync", "api_url", default="")
 
     def is_logged_in(self) -> bool:
         """Check if user has valid stored credentials."""

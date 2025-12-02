@@ -2,6 +2,8 @@
 
 A PyQt6 desktop application for Star Citizen players to streamline hauling missions. Capture mission screenshots, extract data via AI vision APIs, manage your hauling contracts, and optimize delivery routes.
 
+![Welcome Screen](.images/welcome.png)
+
 ## Features
 
 ### Mission Capture & Extraction
@@ -17,22 +19,22 @@ A PyQt6 desktop application for Star Citizen players to streamline hauling missi
 - **Persistent Storage**: Missions saved locally with automatic backups
 
 ### Route Optimization
-- **VRP Solver**: Vehicle Routing Problem algorithms optimize your delivery route
+- **VRP Solver**: Vehicle Routing Problem algorithm optimizes your delivery route
 - **Ship Profiles**: Configure cargo capacity for different ships (Hull A/B/C, Freelancer, etc.)
 - **Pickup-Delivery Constraints**: Ensures cargo is picked up before delivery
 - **Capacity Management**: Routes respect your ship's cargo limits
-- **Multiple Algorithms**: Choose from nearest neighbor, 2-opt, or dynamic regret-based optimization
 
-### Cloud Sync
+### Cloud Sync (Optional)
 - **Scan Database**: Store historical mission scans in the cloud
 - **Discord Authentication**: Secure sync via Discord OAuth
 - **Cross-Device Access**: Access your mission history from anywhere
+- **Self-Hosted**: Deploy your own sync backend using the included Cloudflare Worker
 
 ### User Experience
 - **Dark Theme**: Modern dark UI designed for extended sessions
 - **Global Hotkeys**: Capture and save missions without switching windows
 - **Location Autocomplete**: Smart autocomplete for Star Citizen locations across Stanton, Pyro, and Nyx systems
-- **Configurable**: Customize API providers, hotkeys, UI settings via config file
+- **Configurable**: Customize API providers, hotkeys, UI settings via the Configuration tab
 
 ## Installation
 
@@ -60,7 +62,23 @@ venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 ```
 
-4. Set up API keys (choose one):
+4. Run the application:
+```bash
+python main.py
+```
+
+## Configuration
+
+All settings can be configured through the **Configuration** tab in the application:
+
+![Configuration Screen](.images/app_configuration.png)
+
+### API Keys
+
+API keys can be set in two ways:
+
+1. **Via the Configuration tab** (recommended): Enter your API key directly in the application settings
+2. **Via environment variables** (optional):
 ```bash
 # For Anthropic Claude
 set ANTHROPIC_API_KEY=your-api-key
@@ -69,20 +87,14 @@ set ANTHROPIC_API_KEY=your-api-key
 set OPENROUTER_API_KEY=your-api-key
 ```
 
-5. Run the application:
-```bash
-python main.py
-```
+### Available Settings
 
-## Configuration
-
-Edit `config.json` to customize:
-
-- **API Provider**: Switch between `anthropic` and `openrouter`
+- **API Provider**: Switch between Anthropic and OpenRouter
 - **API Model**: Choose which vision model to use
 - **Hotkeys**: Configure global keyboard shortcuts
-- **UI Settings**: Adjust canvas height, window title, auto-switch behavior
-- **Route Planner**: Set default ship and optimization algorithm
+- **Ship Profile**: Set your default ship for route planning
+- **Route Quality**: Balance between speed and optimization quality
+- **Cloud Sync URL**: Configure your self-hosted sync backend (optional)
 
 ## Usage
 
@@ -90,7 +102,7 @@ Edit `config.json` to customize:
 
 1. Open the **Capture** tab
 2. Click "Select Region" and drag to select your mission objective area in Star Citizen
-3. Press your capture hotkey (default: Shift+PrintScreen) or click "Capture"
+3. Press your capture hotkey (default: Shift+F11) or click "Capture"
 4. Review the extracted mission data in the validation form
 5. Click "Add to Hauling" to save the mission
 
@@ -98,7 +110,7 @@ Edit `config.json` to customize:
 
 1. Add missions from the Capture tab or import from the Scan Database
 2. Open the **Route Planner** tab
-3. Select your ship profile to set cargo capacity
+3. Your ship profile is configured in the Configuration tab
 4. Click "Optimize Route" to generate an efficient delivery order
 5. Follow the stop-by-stop instructions with cargo tracking
 
@@ -106,17 +118,17 @@ Edit `config.json` to customize:
 
 | Hotkey | Action |
 |--------|--------|
-| Shift + PrintScreen | Capture screen region and extract mission |
-| Shift + Enter | Add current mission to hauling list |
+| Shift + F11 | Capture screen region and extract mission |
+| Shift + F12 | Add current mission to hauling list |
 
-Hotkeys can be customized in `config.json`.
+Hotkeys can be customized in the Configuration tab.
 
 ## Project Structure
 
 ```
 pySCHaulingAssistant/
 ├── main.py                 # Application entry point
-├── config.json             # User configuration
+├── config.json             # User configuration (gitignored)
 ├── missions.json           # Active mission storage
 ├── requirements.txt        # Python dependencies
 ├── src/

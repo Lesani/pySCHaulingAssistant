@@ -397,7 +397,7 @@ class ConfigTab(QWidget):
         self._on_provider_changed(self.provider_combo.currentText())
 
         # Sync settings
-        sync_url = self.config.get("sync", "api_url", default="https://your-sync-server.example.com")
+        sync_url = self.config.get("sync", "api_url", default="")
         self.sync_url_edit.setText(sync_url)
 
         # Route planner settings
@@ -618,7 +618,7 @@ class ConfigTab(QWidget):
             if "sync" not in self.config.settings:
                 self.config.settings["sync"] = {}
 
-            self.config.settings["sync"]["api_url"] = self.sync_url_edit.text().strip() or "https://your-sync-server.example.com"
+            self.config.settings["sync"]["api_url"] = self.sync_url_edit.text().strip()
 
             # Route planner settings
             if "route_planner" not in self.config.settings:
