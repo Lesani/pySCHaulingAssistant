@@ -165,7 +165,6 @@ class RoutePlannerTab(QWidget):
         self.selected_ship_capacity = config.get("route_planner", "ship_capacity", default=96)
         self.route_quality = config.get("route_planner", "route_quality", default="best")
         self.current_route = None
-        self.completed_stops = set()  # Track completed stop numbers (rebuilt from mission data)
         self._optimization_generation = 0  # Counter to ignore stale results
         self._active_workers = []  # Keep references to prevent garbage collection
 
@@ -318,8 +317,9 @@ class RoutePlannerTab(QWidget):
             return
 
         # Merge in-hold cargo deliveries into the route
-        self.current_route = self._merge_inhold_deliveries(route)
-        self._rebuild_completed_stops()
+        merged_route = self._merge_inhold_deliveries(route)
+        # Filter out completed deliveries
+        self.current_route = self._filter_route_for_display(merged_route)
         self.status_label.setText(status_message)
         self._update_route_display()
         logger.info(f"Route optimized: {len(self.current_route.stops)} stops - {status_message}")
@@ -386,43 +386,59 @@ class RoutePlannerTab(QWidget):
 
         return Route(stops=new_stops)
 
-    def _rebuild_completed_stops(self):
-        """Rebuild completed_stops from mission objective completion data."""
-        self.completed_stops.clear()
-        if not self.current_route:
-            return
+    def _filter_route_for_display(self, route):
+        """
+        Filter route to only show stops with pending actions.
 
-        for i, stop in enumerate(self.current_route.stops):
-            stop_num = i + 1
-            stop_complete = True
+        Removes:
+        - Deliveries that are already completed (delivery_completed=True)
+        - Stops that have no remaining actions after filtering
+        """
+        if not route:
+            return route
 
-            # Check all pickups at this stop
-            for pickup in stop.pickups:
-                if hasattr(pickup, 'mission_id') and pickup.mission_id:
-                    pickup_done, _ = self.mission_manager.get_objective_completion(
-                        pickup.mission_id, pickup.collect_from, pickup.deliver_to
+        from src.domain.models import Stop, Route
+
+        filtered_stops = []
+        stop_number = 1
+
+        for stop in route.stops:
+            # Filter out completed deliveries
+            pending_deliveries = []
+            for delivery in stop.deliveries:
+                if hasattr(delivery, 'mission_id') and delivery.mission_id:
+                    _, delivery_done = self.mission_manager.get_objective_completion(
+                        delivery.mission_id, delivery.collect_from, delivery.deliver_to
                     )
-                    if not pickup_done:
-                        stop_complete = False
-                        break
+                    if not delivery_done:
+                        pending_deliveries.append(delivery)
+                else:
+                    # No mission_id means we can't check completion, keep it
+                    pending_deliveries.append(delivery)
 
-            # Check all deliveries at this stop
-            if stop_complete:
-                for delivery in stop.deliveries:
-                    if hasattr(delivery, 'mission_id') and delivery.mission_id:
-                        _, delivery_done = self.mission_manager.get_objective_completion(
-                            delivery.mission_id, delivery.collect_from, delivery.deliver_to
-                        )
-                        if not delivery_done:
-                            stop_complete = False
-                            break
+            # Keep stop if it has any pending actions (pickups or pending deliveries)
+            if stop.pickups or pending_deliveries:
+                new_stop = Stop(
+                    location=stop.location,
+                    stop_number=stop_number,
+                    pickups=stop.pickups,
+                    deliveries=pending_deliveries,
+                    cargo_before=stop.cargo_before,
+                    cargo_after=stop.cargo_after
+                )
+                filtered_stops.append(new_stop)
+                stop_number += 1
 
-            # Stop is complete only if it has actions and all are done
-            if stop_complete and (stop.pickups or stop.deliveries):
-                self.completed_stops.add(stop_num)
+        return Route(stops=filtered_stops)
 
     def _get_cargo_in_hold(self):
-        """Get objectives that are picked up but not yet delivered (in cargo hold)."""
+        """
+        Get objectives that are picked up but not yet delivered (in cargo hold).
+
+        Returns objectives where:
+        - pickup_completed = True (we have the cargo)
+        - delivery_completed = False (we haven't delivered it yet)
+        """
         in_hold = []
         for mission in self.mission_manager.get_missions(status="active"):
             for obj in mission.get("objectives", []):
@@ -532,6 +548,35 @@ class RoutePlannerTab(QWidget):
 
         return color_palette[destination_colors[destination]]
 
+    def _get_mission_color(self, mission_id: str, mission_colors: dict) -> QColor:
+        """
+        Get a distinct color for a mission.
+
+        Args:
+            mission_id: Mission UUID
+            mission_colors: Dictionary tracking mission_id to color index mapping
+
+        Returns:
+            QColor for the mission
+        """
+        # Palette of distinct colors for missions (brighter than destination colors)
+        color_palette = [
+            QColor(60, 80, 60),     # Green tint
+            QColor(60, 60, 80),     # Blue tint
+            QColor(80, 70, 50),     # Orange/brown tint
+            QColor(70, 50, 70),     # Purple tint
+            QColor(50, 70, 70),     # Cyan tint
+            QColor(80, 60, 60),     # Red tint
+            QColor(70, 70, 50),     # Olive tint
+            QColor(60, 70, 80),     # Steel blue tint
+        ]
+
+        # Assign color index to new missions
+        if mission_id not in mission_colors:
+            mission_colors[mission_id] = len(mission_colors) % len(color_palette)
+
+        return color_palette[mission_colors[mission_id]]
+
     def _update_route_display(self):
         """Update the route tree display."""
         self.route_tree.clear()
@@ -544,26 +589,33 @@ class RoutePlannerTab(QWidget):
         if cargo_in_hold:
             hold_item = QTreeWidgetItem(self.route_tree)
             hold_item.setText(0, "")
-            hold_item.setText(1, "In Hold")
+            hold_item.setText(1, "[HOLD]")
             hold_item.setText(2, "Cargo Hold")
             hold_total_scu = sum(obj.get('scu_amount', 0) for obj in cargo_in_hold)
-            hold_item.setText(3, f"Loaded: {hold_total_scu} SCU")
+            hold_item.setText(3, f"{len(cargo_in_hold)} items loaded")
             cargo_pct = (hold_total_scu / self.selected_ship_capacity * 100) if self.selected_ship_capacity > 0 else 0
             hold_item.setText(4, f"{hold_total_scu} SCU ({cargo_pct:.0f}%)")
 
-            # Style the hold section
+            # Style the hold section header
             for col in range(5):
                 hold_item.setForeground(col, QBrush(QColor("#4caf50")))  # Green
 
-            # Add detail rows for cargo in hold
+            # Add detail rows for cargo in hold, colored by mission
+            mission_colors = {}  # Track colors per mission_id
             for obj in cargo_in_hold:
                 detail_item = QTreeWidgetItem(hold_item)
-                detail_item.setText(2, f"  ✓ {obj.get('scu_amount', 0)} SCU {obj.get('cargo_type', 'Unknown')}")
-                detail_item.setText(3, f"→ Deliver to {obj.get('deliver_to', '?')}")
-                for col in range(5):
-                    detail_item.setForeground(col, QBrush(QColor("#808080")))
+                detail_item.setText(2, f"  [OK] {obj.get('scu_amount', 0)} SCU {obj.get('cargo_type', 'Unknown')}")
+                detail_item.setText(3, f"-> Deliver to {obj.get('deliver_to', '?')}")
 
-            hold_item.setExpanded(False)  # Collapsed by default
+                # Color by mission
+                mission_id = obj.get('mission_id', '')
+                if mission_id:
+                    bg_color = self._get_mission_color(mission_id, mission_colors)
+                    for col in range(5):
+                        detail_item.setData(col, Qt.ItemDataRole.BackgroundRole, bg_color)
+                        detail_item.setForeground(col, QBrush(QColor("#e0e0e0")))  # Light text
+
+            hold_item.setExpanded(True)  # Expanded by default to show cargo
 
         if not self.current_route:
             return
@@ -578,9 +630,8 @@ class RoutePlannerTab(QWidget):
             # Stop number
             stop_item.setText(0, str(i))
 
-            # Status
-            is_complete = i in self.completed_stops
-            status = "✅ Complete" if is_complete else "⏳ Pending"
+            # Status - any stop in the route is pending (completed items are filtered out)
+            status = "[TODO] Pending"
             stop_item.setText(1, status)
 
             # Location
@@ -607,11 +658,6 @@ class RoutePlannerTab(QWidget):
             cargo_pct = (current_cargo / self.selected_ship_capacity * 100) if self.selected_ship_capacity > 0 else 0
             stop_item.setText(4, f"{current_cargo} SCU ({cargo_pct:.0f}%)")
 
-            # Color code completed stops
-            if is_complete:
-                for col in range(5):
-                    stop_item.setForeground(col, QBrush(QColor("#4caf50")))
-
             # Add detail rows for pickups - grouped by destination and sorted by delivery order
             if stop.pickups:
                 sorted_pickups = self._sort_pickups_by_delivery_order(stop.pickups, i)
@@ -626,97 +672,142 @@ class RoutePlannerTab(QWidget):
                     delivery_stop_num = self._find_delivery_stop_number(pickup.deliver_to, i)
                     stop_indicator = f" (Stop #{delivery_stop_num})" if delivery_stop_num else ""
 
-                    detail_item.setText(2, f"  📦 Load: {pickup.scu_amount} SCU {pickup.cargo_type}")
-                    detail_item.setText(3, f"→ Deliver to {pickup.deliver_to}{stop_indicator}")
+                    detail_item.setText(2, f"  [LOAD] Load: {pickup.scu_amount} SCU {pickup.cargo_type}")
+                    detail_item.setText(3, f"-> Deliver to {pickup.deliver_to}{stop_indicator}")
+
+                    # Store objective data for individual completion
+                    detail_item.setData(0, Qt.ItemDataRole.UserRole + 1, {
+                        'type': 'pickup',
+                        'mission_id': getattr(pickup, 'mission_id', None),
+                        'collect_from': pickup.collect_from,
+                        'deliver_to': pickup.deliver_to,
+                        'cargo_type': pickup.cargo_type,
+                        'scu_amount': pickup.scu_amount
+                    })
 
                     # Apply colored background for destination grouping
                     bg_color = self._get_destination_color(pickup.deliver_to, destination_colors)
                     for col in range(5):
                         detail_item.setData(col, Qt.ItemDataRole.BackgroundRole, bg_color)
 
-                    if is_complete:
-                        for col in range(5):
-                            detail_item.setForeground(col, QBrush(QColor("#808080")))
-
             # Add detail rows for deliveries
             for delivery in stop.deliveries:
                 detail_item = QTreeWidgetItem(stop_item)
-                detail_item.setText(2, f"  📤 Deliver: {delivery.scu_amount} SCU {delivery.cargo_type}")
-                detail_item.setText(3, f"← From {delivery.collect_from}")
-                if is_complete:
-                    for col in range(5):
-                        detail_item.setForeground(col, QBrush(QColor("#808080")))
+                detail_item.setText(2, f"  [DELIVER] Deliver: {delivery.scu_amount} SCU {delivery.cargo_type}")
+                detail_item.setText(3, f"<- From {delivery.collect_from}")
 
-            # Auto-collapse completed stops, keep pending stops expanded
-            stop_item.setExpanded(not is_complete)
+                # Store objective data for individual completion
+                detail_item.setData(0, Qt.ItemDataRole.UserRole + 1, {
+                    'type': 'delivery',
+                    'mission_id': getattr(delivery, 'mission_id', None),
+                    'collect_from': delivery.collect_from,
+                    'deliver_to': delivery.deliver_to,
+                    'cargo_type': delivery.cargo_type,
+                    'scu_amount': delivery.scu_amount
+                })
 
-        # Update status - count completed missions from mission manager
-        completed = len(self.completed_stops)
+            # All stops in route are pending, keep expanded
+            stop_item.setExpanded(True)
+
+        # Update status - show remaining stops and completed missions
         total = len(self.current_route.stops)
+        cargo_in_hold = self._get_cargo_in_hold()
+        in_hold_count = len(cargo_in_hold)
         completed_missions = len(self.mission_manager.get_missions(status="completed"))
         self.status_label.setText(
-            f"Progress: {completed}/{total} stops  |  {completed_missions} missions done"
+            f"{total} stops remaining  |  {in_hold_count} items in hold  |  {completed_missions} missions done"
         )
 
     def _toggle_stop_completion(self, item: QTreeWidgetItem, column: int):
-        """Toggle stop completion on double-click."""
+        """Mark stop or individual cargo item as complete on double-click."""
+        # Check if this is an individual cargo item (detail row)
+        obj_data = item.data(0, Qt.ItemDataRole.UserRole + 1)
+        if obj_data:
+            self._complete_single_objective(obj_data)
+            self.refresh()
+            return
+
+        # Otherwise, check if this is a stop row
         stop_num = item.data(0, Qt.ItemDataRole.UserRole)
         if not stop_num:
-            return  # Detail row clicked
-
-        if stop_num in self.completed_stops:
-            self._uncomplete_stop(stop_num)
-        else:
-            self._complete_stop_and_missions(stop_num)
-
-        self._update_route_display()
-
-    def _uncomplete_stop(self, stop_num: int):
-        """Mark stop as incomplete and update objective completion in missions."""
-        self.completed_stops.discard(stop_num)
+            return  # Unknown row type
 
         if not self.current_route or stop_num > len(self.current_route.stops):
             return
 
-        stop = self.current_route.stops[stop_num - 1]
+        # All stops in the route are pending, so double-click marks complete
+        self._complete_stop_and_missions(stop_num)
+        # Re-optimize to move completed pickups to "In Cargo Hold"
+        self.refresh()
 
-        # Mark all pickups at this stop as not completed
-        for pickup in stop.pickups:
-            if hasattr(pickup, 'mission_id') and pickup.mission_id:
-                self.mission_manager.update_objective_completion(
-                    pickup.mission_id, pickup.collect_from, pickup.deliver_to, pickup_completed=False
-                )
+    def _complete_single_objective(self, obj_data: dict):
+        """Mark a single pickup or delivery objective as complete."""
+        mission_id = obj_data.get('mission_id')
+        if not mission_id:
+            logger.warning("Cannot complete objective without mission_id")
+            return
 
-        # Mark all deliveries at this stop as not completed
-        for delivery in stop.deliveries:
-            if hasattr(delivery, 'mission_id') and delivery.mission_id:
-                self.mission_manager.update_objective_completion(
-                    delivery.mission_id, delivery.collect_from, delivery.deliver_to, delivery_completed=False
-                )
+        obj_type = obj_data.get('type')
+        collect_from = obj_data.get('collect_from')
+        deliver_to = obj_data.get('deliver_to')
+        cargo_type = obj_data.get('cargo_type')
+        scu_amount = obj_data.get('scu_amount')
+
+        logger.info(f"Completing single {obj_type}: {scu_amount} SCU {cargo_type} "
+                   f"from {collect_from} to {deliver_to}")
+
+        if obj_type == 'pickup':
+            self.mission_manager.update_objective_completion(
+                mission_id, collect_from, deliver_to,
+                pickup_completed=True,
+                cargo_type=cargo_type,
+                scu_amount=scu_amount
+            )
+        elif obj_type == 'delivery':
+            self.mission_manager.update_objective_completion(
+                mission_id, collect_from, deliver_to,
+                delivery_completed=True,
+                cargo_type=cargo_type,
+                scu_amount=scu_amount
+            )
+            # Check if mission is now fully complete
+            self._check_mission_completion(mission_id)
 
     def _complete_stop_and_missions(self, stop_num: int):
         """Mark stop complete and update objective completion in missions."""
-        self.completed_stops.add(stop_num)
-
         if not self.current_route or stop_num > len(self.current_route.stops):
             return
 
         stop = self.current_route.stops[stop_num - 1]
         affected_missions = set()
 
+        logger.info(f"Completing stop {stop_num} at {stop.location}")
+        logger.info(f"  Pickups: {len(stop.pickups)}, Deliveries: {len(stop.deliveries)}")
+
         # Mark all pickups at this stop as completed
-        for pickup in stop.pickups:
+        for i, pickup in enumerate(stop.pickups):
+            logger.info(f"  Pickup {i}: mission_id={getattr(pickup, 'mission_id', 'NONE')}, "
+                       f"{pickup.scu_amount} SCU {pickup.cargo_type} from {pickup.collect_from}")
             if hasattr(pickup, 'mission_id') and pickup.mission_id:
-                self.mission_manager.update_objective_completion(
-                    pickup.mission_id, pickup.collect_from, pickup.deliver_to, pickup_completed=True
+                result = self.mission_manager.update_objective_completion(
+                    pickup.mission_id, pickup.collect_from, pickup.deliver_to,
+                    pickup_completed=True,
+                    cargo_type=pickup.cargo_type,
+                    scu_amount=pickup.scu_amount
                 )
+                logger.info(f"    -> update result: {result}")
                 affected_missions.add(pickup.mission_id)
+            else:
+                logger.warning(f"    -> NO mission_id on pickup!")
 
         # Mark all deliveries at this stop as completed
         for delivery in stop.deliveries:
             if hasattr(delivery, 'mission_id') and delivery.mission_id:
                 self.mission_manager.update_objective_completion(
-                    delivery.mission_id, delivery.collect_from, delivery.deliver_to, delivery_completed=True
+                    delivery.mission_id, delivery.collect_from, delivery.deliver_to,
+                    delivery_completed=True,
+                    cargo_type=delivery.cargo_type,
+                    scu_amount=delivery.scu_amount
                 )
                 affected_missions.add(delivery.mission_id)
 
@@ -743,36 +834,52 @@ class RoutePlannerTab(QWidget):
             logger.info(f"Mission {mission_id} completed (all objectives done)")
 
     def _show_context_menu(self, position):
-        """Show context menu for route stops."""
+        """Show context menu for route stops and individual cargo items."""
         item = self.route_tree.itemAt(position)
         if not item:
             return
 
-        stop_num = item.data(0, Qt.ItemDataRole.UserRole)
-        if not stop_num:
-            return  # Detail row
-
         menu = QMenu(self)
 
-        if stop_num in self.completed_stops:
-            action = QAction("❌ Mark Incomplete", self)
-            action.triggered.connect(lambda: self._mark_incomplete(stop_num))
-        else:
-            action = QAction("✅ Mark Complete", self)
-            action.triggered.connect(lambda: self._mark_complete(stop_num))
+        # Check if this is an individual cargo item (detail row)
+        obj_data = item.data(0, Qt.ItemDataRole.UserRole + 1)
+        if obj_data:
+            obj_type = obj_data.get('type', 'item')
+            cargo_type = obj_data.get('cargo_type', 'Unknown')
+            scu = obj_data.get('scu_amount', 0)
+
+            if obj_type == 'pickup':
+                action = QAction(f"[OK] Mark Loaded: {scu} SCU {cargo_type}", self)
+            else:
+                action = QAction(f"[OK] Mark Delivered: {scu} SCU {cargo_type}", self)
+
+            action.triggered.connect(lambda: self._mark_single_complete(obj_data))
+            menu.addAction(action)
+            menu.exec(self.route_tree.viewport().mapToGlobal(position))
+            return
+
+        # Check if this is a stop row
+        stop_num = item.data(0, Qt.ItemDataRole.UserRole)
+        if not stop_num:
+            return  # Unknown row type
+
+        # All stops in the route are pending (completed items filtered out)
+        action = QAction("[OK] Mark Stop Complete", self)
+        action.triggered.connect(lambda: self._mark_complete(stop_num))
 
         menu.addAction(action)
         menu.exec(self.route_tree.viewport().mapToGlobal(position))
 
+    def _mark_single_complete(self, obj_data: dict):
+        """Mark a single cargo item as complete from context menu."""
+        self._complete_single_objective(obj_data)
+        self.refresh()
+
     def _mark_complete(self, stop_num: int):
         """Mark stop as complete."""
         self._complete_stop_and_missions(stop_num)
-        self._update_route_display()
-
-    def _mark_incomplete(self, stop_num: int):
-        """Mark stop as incomplete."""
-        self._uncomplete_stop(stop_num)
-        self._update_route_display()
+        # Re-optimize to move completed pickups to "In Cargo Hold"
+        self.refresh()
 
     def _reset_progress(self):
         """Reset all progress tracking for active missions."""
@@ -785,7 +892,6 @@ class RoutePlannerTab(QWidget):
         )
 
         if reply == QMessageBox.StandardButton.Yes:
-            self.completed_stops.clear()
             # Reset completion flags on all active mission objectives
             for mission in self.mission_manager.get_missions(status="active"):
                 for obj in mission.get("objectives", []):

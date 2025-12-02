@@ -153,7 +153,9 @@ class MissionManager:
 
     def update_objective_completion(self, mission_id: str, collect_from: str, deliver_to: str,
                                      pickup_completed: bool = None,
-                                     delivery_completed: bool = None) -> bool:
+                                     delivery_completed: bool = None,
+                                     cargo_type: str = None,
+                                     scu_amount: int = None) -> bool:
         """
         Update completion status of a specific objective.
 
@@ -163,6 +165,8 @@ class MissionManager:
             deliver_to: Delivery location (part of unique identifier)
             pickup_completed: Set pickup completion status (None to leave unchanged)
             delivery_completed: Set delivery completion status (None to leave unchanged)
+            cargo_type: Cargo type for disambiguation (optional but recommended)
+            scu_amount: SCU amount for disambiguation (optional but recommended)
 
         Returns:
             True if updated, False if not found
@@ -171,12 +175,17 @@ class MissionManager:
             if mission["id"] == mission_id:
                 for objective in mission.get("objectives", []):
                     if objective.get("collect_from") == collect_from and objective.get("deliver_to") == deliver_to:
+                        # If cargo_type/scu_amount provided, use them for disambiguation
+                        if cargo_type is not None and objective.get("cargo_type") != cargo_type:
+                            continue
+                        if scu_amount is not None and objective.get("scu_amount") != scu_amount:
+                            continue
                         if pickup_completed is not None:
                             objective["pickup_completed"] = pickup_completed
                         if delivery_completed is not None:
                             objective["delivery_completed"] = delivery_completed
                         self.save()
-                        logger.debug(f"Updated objective {mission_id}:{collect_from}->{deliver_to} - pickup={pickup_completed}, delivery={delivery_completed}")
+                        logger.debug(f"Updated objective {mission_id}:{collect_from}->{deliver_to} ({cargo_type}, {scu_amount} SCU) - pickup={pickup_completed}, delivery={delivery_completed}")
                         return True
         return False
 
