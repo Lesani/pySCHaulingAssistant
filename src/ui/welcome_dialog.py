@@ -60,18 +60,24 @@ class WelcomeDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.setSpacing(15)
-        layout.setContentsMargins(30, 20, 30, 30)
+        layout.setContentsMargins(0, 0, 0, 0)
 
-        # Header image
+        # Header image - edge to edge
         image_path = Path(__file__).parent.parent.parent / ".images" / "welcome.png"
         if image_path.exists():
             header_label = QLabel()
             pixmap = QPixmap(str(image_path))
             # Scale to fit dialog width while maintaining aspect ratio
-            scaled_pixmap = pixmap.scaledToWidth(390, Qt.TransformationMode.SmoothTransformation)
+            scaled_pixmap = pixmap.scaledToWidth(450, Qt.TransformationMode.SmoothTransformation)
             header_label.setPixmap(scaled_pixmap)
             header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            header_label.setContentsMargins(0, 0, 0, 0)
             layout.addWidget(header_label)
+
+        # Content area with padding
+        content_layout = QVBoxLayout()
+        content_layout.setSpacing(15)
+        content_layout.setContentsMargins(30, 15, 30, 30)
 
         # Welcome text - left aligned, personalized if Discord authenticated
         if self.discord_username:
@@ -81,15 +87,15 @@ class WelcomeDialog(QDialog):
 
         title = QLabel(welcome_text)
         title_font = QFont()
-        title_font.setPointSize(16)
+        title_font.setPointSize(32)
         title_font.setBold(True)
         title.setFont(title_font)
         title.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(title)
+        content_layout.addWidget(title)
 
         # Ship selection group
         ship_group = QGroupBox("Select Your Ship")
-        ship_layout = QVBoxLayout(ship_group)
+        ship_group_layout = QVBoxLayout(ship_group)
 
         self.ship_combo = QComboBox()
         self.ship_combo.setMinimumHeight(35)
@@ -104,25 +110,25 @@ class WelcomeDialog(QDialog):
             display_text = f"{ship.display_name} ({ship.cargo_capacity_scu} SCU)"
             self.ship_combo.addItem(display_text, ship_key)
 
-        ship_layout.addWidget(self.ship_combo)
+        ship_group_layout.addWidget(self.ship_combo)
 
         # Ship info label
         self.ship_info_label = QLabel()
         self.ship_info_label.setStyleSheet("color: #888; font-size: 11px; padding: 5px;")
         self.ship_info_label.setWordWrap(True)
-        ship_layout.addWidget(self.ship_info_label)
+        ship_group_layout.addWidget(self.ship_info_label)
 
         self.ship_combo.currentIndexChanged.connect(self._on_ship_changed)
 
-        layout.addWidget(ship_group)
+        content_layout.addWidget(ship_group)
 
         # Spacer
-        layout.addStretch()
+        content_layout.addStretch()
 
         # Session buttons - two big action buttons
         session_label = QLabel("Start Session")
         session_label.setStyleSheet("font-weight: bold; font-size: 13px; margin-top: 10px;")
-        layout.addWidget(session_label)
+        content_layout.addWidget(session_label)
 
         # Continue Session button (if has active missions)
         self.continue_btn = QPushButton("Continue Session")
@@ -138,14 +144,17 @@ class WelcomeDialog(QDialog):
             self.continue_btn.setEnabled(False)
             self.continue_btn.setProperty("class", "secondary")
 
-        layout.addWidget(self.continue_btn)
+        content_layout.addWidget(self.continue_btn)
 
         # Start Fresh button
         self.fresh_btn = QPushButton("Start Fresh\nClear all missions and start new")
         self.fresh_btn.setMinimumHeight(50)
         self.fresh_btn.setProperty("class", "secondary")
         self.fresh_btn.clicked.connect(self._on_fresh)
-        layout.addWidget(self.fresh_btn)
+        content_layout.addWidget(self.fresh_btn)
+
+        # Add content layout to main layout
+        layout.addLayout(content_layout)
 
         # Trigger initial ship info update
         self._on_ship_changed(self.ship_combo.currentIndex())
