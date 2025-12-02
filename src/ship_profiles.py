@@ -81,7 +81,7 @@ SHIP_PROFILES: Dict[str, ShipProfile] = {
         manufacturer=ShipManufacturer.ARGO,
         cargo_capacity_scu=192,
         cargo_hold_type="external",
-        description="Compact single-seat cargo hauler with six 32 SCU containers"
+        description="Compact single-seat cargo hauler with external cargo grid"
     ),
     "MISC_HULL_A": ShipProfile(
         name="Hull A",
@@ -132,7 +132,7 @@ SHIP_PROFILES: Dict[str, ShipProfile] = {
         manufacturer=ShipManufacturer.MISC,
         cargo_capacity_scu=512,
         cargo_hold_type="external",
-        description="Small-scale commercial freighter with 16 containers"
+        description="Small-scale commercial freighter"
     ),
 
     # Large haulers
@@ -167,7 +167,7 @@ SHIP_PROFILES: Dict[str, ShipProfile] = {
         cargo_hold_type="external",
         can_land_on_outposts=False,
         can_land_on_stations=False,  # Requires station docking
-        description="Capital-class bulk freighter with 216 containers"
+        description="Capital-class bulk freighter"
     ),
     "MISC_HULL_E": ShipProfile(
         name="Hull E",
@@ -176,7 +176,7 @@ SHIP_PROFILES: Dict[str, ShipProfile] = {
         cargo_hold_type="external",
         can_land_on_outposts=False,
         can_land_on_stations=False,
-        description="Super-freighter with 384 containers"
+        description="Super-freighter for massive cargo operations"
     ),
 }
 
