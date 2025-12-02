@@ -29,7 +29,7 @@ logger = get_logger()
 
 # Constants
 NO_LOCATION_TEXT = "-- No Location --"
-INTERSTELLAR_TEXT = "-- INTERSTELLAR --"
+INTERSTELLAR_TEXT = "INTERSTELLAR"
 
 
 class ImageSelectionWidget(QLabel):

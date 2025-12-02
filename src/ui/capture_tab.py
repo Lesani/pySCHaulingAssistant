@@ -30,7 +30,7 @@ logger = get_logger()
 # Constants
 LOCATION_TIMEOUT_MINUTES = 10
 NO_LOCATION_TEXT = "-- No Location --"
-INTERSTELLAR_TEXT = "-- INTERSTELLAR --"
+INTERSTELLAR_TEXT = "INTERSTELLAR"
 
 
 class CaptureTab(QWidget):
