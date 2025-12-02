@@ -5,14 +5,15 @@ Allows users to select their ship and choose whether to continue
 their previous session or start fresh.
 """
 
-from typing import List, Dict, Any
+from pathlib import Path
+from typing import List, Dict, Any, Optional
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
-    QPushButton, QGroupBox, QFrame
+    QPushButton, QGroupBox
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QPixmap
 
 from src.config import Config
 from src.ship_profiles import SHIP_PROFILES, ShipProfile
@@ -29,11 +30,18 @@ class WelcomeDialog(QDialog):
     Allows selecting ship and choosing to continue or start fresh.
     """
 
-    def __init__(self, config: Config, active_missions: List[Dict[str, Any]], parent=None):
+    def __init__(
+        self,
+        config: Config,
+        active_missions: List[Dict[str, Any]],
+        discord_username: Optional[str] = None,
+        parent=None
+    ):
         super().__init__(parent)
         self.config = config
         self.active_missions = active_missions
         self.has_active_missions = len(active_missions) > 0
+        self.discord_username = discord_username
 
         self.selected_ship_key: str = ""
         self.start_fresh: bool = False
@@ -51,29 +59,33 @@ class WelcomeDialog(QDialog):
         self.setStyleSheet(get_stylesheet())
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(20)
-        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(15)
+        layout.setContentsMargins(30, 20, 30, 30)
 
-        # Title
-        title = QLabel("Welcome, Hauler!")
+        # Header image
+        image_path = Path(__file__).parent.parent.parent / ".images" / "welcome.png"
+        if image_path.exists():
+            header_label = QLabel()
+            pixmap = QPixmap(str(image_path))
+            # Scale to fit dialog width while maintaining aspect ratio
+            scaled_pixmap = pixmap.scaledToWidth(390, Qt.TransformationMode.SmoothTransformation)
+            header_label.setPixmap(scaled_pixmap)
+            header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(header_label)
+
+        # Welcome text - left aligned, personalized if Discord authenticated
+        if self.discord_username:
+            welcome_text = f"Welcome, {self.discord_username}!"
+        else:
+            welcome_text = "Welcome, Hauler!"
+
+        title = QLabel(welcome_text)
         title_font = QFont()
-        title_font.setPointSize(18)
+        title_font.setPointSize(16)
         title_font.setBold(True)
         title.setFont(title_font)
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(title)
-
-        # Subtitle
-        subtitle = QLabel("Configure your session before starting")
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        subtitle.setStyleSheet("color: #888; margin-bottom: 10px;")
-        layout.addWidget(subtitle)
-
-        # Separator
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setStyleSheet("background-color: #444;")
-        layout.addWidget(separator)
 
         # Ship selection group
         ship_group = QGroupBox("Select Your Ship")

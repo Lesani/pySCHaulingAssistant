@@ -326,7 +326,10 @@ class MainWindow(QMainWindow):
         # Get active missions for summary display
         active_missions = self.mission_manager.get_missions(status="active")
 
-        dialog = WelcomeDialog(self.config, active_missions, self)
+        # Get Discord username if authenticated
+        discord_username = self.discord_auth.get_username()
+
+        dialog = WelcomeDialog(self.config, active_missions, discord_username, self)
         result = dialog.exec()
 
         if result == WelcomeDialog.DialogCode.Accepted:
