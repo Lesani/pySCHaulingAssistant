@@ -8,10 +8,11 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QPushButton, QTreeWidget, QTreeWidgetItem, QHeaderView,
     QMessageBox, QFileDialog, QScrollArea, QSplitter, QApplication,
-    QComboBox, QProgressDialog
+    QComboBox, QProgressDialog, QTabWidget, QListWidget, QListWidgetItem,
+    QAbstractItemView, QSizePolicy
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QRect, QPoint
-from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QBrush
+from PyQt6.QtCore import Qt, pyqtSignal, QRect, QPoint, QUrl
+from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QBrush, QKeySequence, QShortcut
 
 from PIL import Image
 import io
@@ -28,6 +29,7 @@ logger = get_logger()
 
 # Constants
 NO_LOCATION_TEXT = "-- No Location --"
+INTERSTELLAR_TEXT = "-- INTERSTELLAR --"
 
 
 class ImageSelectionWidget(QLabel):
@@ -313,6 +315,7 @@ class ScreenshotParserTab(QWidget):
         self.location_combo.setMinimumWidth(250)
         self.location_combo.addItem("-- Select Location --")
         self.location_combo.addItem(NO_LOCATION_TEXT)
+        self.location_combo.addItem(INTERSTELLAR_TEXT)
         # Add all scannable locations
         for loc in self.location_matcher.get_scannable_locations():
             self.location_combo.addItem(loc)
@@ -327,35 +330,33 @@ class ScreenshotParserTab(QWidget):
         controls_layout.setSpacing(8)
 
         load_btn = QPushButton("Load from File")
+        load_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         load_btn.clicked.connect(self._load_from_file)
         controls_layout.addWidget(load_btn)
 
         paste_btn = QPushButton("Paste from Clipboard")
+        paste_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         paste_btn.clicked.connect(self._paste_from_clipboard)
         controls_layout.addWidget(paste_btn)
 
         controls_layout.addSpacing(20)
 
         self.parse_btn = QPushButton("Parse Selection")
+        self.parse_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.parse_btn.setEnabled(False)
         self.parse_btn.clicked.connect(self._parse_selection)
         controls_layout.addWidget(self.parse_btn)
 
         self.parse_full_btn = QPushButton("Parse Full Image")
+        self.parse_full_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.parse_full_btn.setEnabled(False)
         self.parse_full_btn.clicked.connect(self._parse_full_image)
         controls_layout.addWidget(self.parse_full_btn)
 
-        controls_layout.addSpacing(20)
-
-        self.batch_btn = QPushButton("Batch Process...")
-        self.batch_btn.setToolTip("Parse multiple screenshots with the same location and selection area")
-        self.batch_btn.clicked.connect(self._batch_process)
-        controls_layout.addWidget(self.batch_btn)
-
         controls_layout.addStretch()
 
         clear_btn = QPushButton("Clear")
+        clear_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         clear_btn.setProperty("class", "secondary")
         clear_btn.clicked.connect(self._clear_all)
         controls_layout.addWidget(clear_btn)
@@ -385,9 +386,13 @@ class ScreenshotParserTab(QWidget):
         image_group.setLayout(image_layout)
         splitter.addWidget(image_group)
 
-        # Results panel
-        results_group = QGroupBox("Parsed Results")
-        results_layout = QVBoxLayout()
+        # Right panel with tabs for Results and Batch
+        self.right_tabs = QTabWidget()
+
+        # Results tab
+        results_widget = QWidget()
+        results_layout = QVBoxLayout(results_widget)
+        results_layout.setContentsMargins(4, 4, 4, 4)
 
         self.results_tree = QTreeWidget()
         self.results_tree.setColumnCount(2)
@@ -411,18 +416,357 @@ class ScreenshotParserTab(QWidget):
         results_actions.addWidget(self.copy_results_btn)
 
         results_layout.addLayout(results_actions)
-        results_group.setLayout(results_layout)
-        splitter.addWidget(results_group)
+        self.right_tabs.addTab(results_widget, "Results")
+
+        # Batch tab
+        batch_widget = self._create_batch_panel()
+        self.right_tabs.addTab(batch_widget, "Batch")
+
+        splitter.addWidget(self.right_tabs)
 
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 1)
 
-        layout.addWidget(splitter)
+        # Add splitter with stretch factor so it expands to fill space
+        layout.addWidget(splitter, 1)  # stretch factor 1 makes it expand
 
         # Status bar
         self.status_label = QLabel("Ready - Load an image to begin")
         self.status_label.setProperty("class", "muted")
         layout.addWidget(self.status_label)
+
+    def _create_batch_panel(self) -> QWidget:
+        """Create the batch processing panel with file list."""
+        batch_widget = QWidget()
+        batch_layout = QVBoxLayout(batch_widget)
+        batch_layout.setContentsMargins(4, 4, 4, 4)
+        batch_layout.setSpacing(6)
+
+        # Toolbar row
+        batch_toolbar = QHBoxLayout()
+        batch_toolbar.setSpacing(6)
+
+        self.batch_add_btn = QPushButton("Add Files...")
+        self.batch_add_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.batch_add_btn.clicked.connect(self._add_batch_files)
+        batch_toolbar.addWidget(self.batch_add_btn)
+
+        self.batch_remove_btn = QPushButton("Remove")
+        self.batch_remove_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.batch_remove_btn.setEnabled(False)
+        self.batch_remove_btn.clicked.connect(self._remove_selected_files)
+        batch_toolbar.addWidget(self.batch_remove_btn)
+
+        batch_toolbar.addStretch()
+
+        batch_clear_btn = QPushButton("Clear")
+        batch_clear_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        batch_clear_btn.setProperty("class", "secondary")
+        batch_clear_btn.clicked.connect(self._clear_batch_list)
+        batch_toolbar.addWidget(batch_clear_btn)
+
+        batch_layout.addLayout(batch_toolbar)
+
+        # File list with drag & drop support
+        self.batch_file_list = QListWidget()
+        self.batch_file_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        self.batch_file_list.setAlternatingRowColors(True)
+        self.batch_file_list.itemSelectionChanged.connect(self._on_batch_selection_changed)
+        self.batch_file_list.itemClicked.connect(self._on_batch_file_clicked)
+        self.batch_file_list.setAcceptDrops(True)
+        self.batch_file_list.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
+
+        # Enable drag & drop on the list widget
+        self.batch_file_list.dragEnterEvent = self._batch_drag_enter
+        self.batch_file_list.dragMoveEvent = self._batch_drag_move
+        self.batch_file_list.dropEvent = self._batch_drop
+
+        batch_layout.addWidget(self.batch_file_list, 1)  # stretch factor 1
+
+        # Delete key shortcut for removing files
+        delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self.batch_file_list)
+        delete_shortcut.activated.connect(self._remove_selected_files)
+
+        # Info label
+        self.batch_info_label = QLabel("Drag files here or click Add Files...")
+        self.batch_info_label.setProperty("class", "muted")
+        self.batch_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        batch_layout.addWidget(self.batch_info_label)
+
+        # Start processing button
+        self.batch_start_btn = QPushButton("Start Processing")
+        self.batch_start_btn.setEnabled(False)
+        self.batch_start_btn.clicked.connect(self._start_batch_processing)
+        batch_layout.addWidget(self.batch_start_btn)
+
+        return batch_widget
+
+    def _add_batch_files(self):
+        """Open file dialog to add files to batch list."""
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select Screenshots for Batch Processing",
+            "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp);;All Files (*)"
+        )
+
+        for path in file_paths:
+            self._add_file_to_batch_list(path)
+
+    def _add_file_to_batch_list(self, file_path: str):
+        """Add a single file to the batch list (skip duplicates)."""
+        import os
+
+        # Check for duplicates
+        for i in range(self.batch_file_list.count()):
+            if self.batch_file_list.item(i).data(Qt.ItemDataRole.UserRole) == file_path:
+                return  # Skip duplicate
+
+        # Add item
+        item = QListWidgetItem(os.path.basename(file_path))
+        item.setData(Qt.ItemDataRole.UserRole, file_path)
+        item.setToolTip(file_path)
+        self.batch_file_list.addItem(item)
+
+        self._update_batch_ui_state()
+
+    def _remove_selected_files(self):
+        """Remove selected files from batch list."""
+        selected_items = self.batch_file_list.selectedItems()
+        for item in selected_items:
+            row = self.batch_file_list.row(item)
+            self.batch_file_list.takeItem(row)
+
+        self._update_batch_ui_state()
+
+    def _clear_batch_list(self):
+        """Clear all files from batch list."""
+        self.batch_file_list.clear()
+        self._update_batch_ui_state()
+
+    def _on_batch_selection_changed(self):
+        """Handle batch list selection change."""
+        has_selection = len(self.batch_file_list.selectedItems()) > 0
+        self.batch_remove_btn.setEnabled(has_selection)
+
+    def _on_batch_file_clicked(self, item: QListWidgetItem):
+        """Preview selected batch file in image widget."""
+        file_path = item.data(Qt.ItemDataRole.UserRole)
+        if file_path:
+            try:
+                image = Image.open(file_path)
+                self._set_image(image)
+                self._current_source = file_path
+                self.status_label.setText(f"Preview: {file_path}")
+            except Exception as e:
+                logger.error(f"Failed to preview batch file: {e}")
+
+    def _update_batch_ui_state(self):
+        """Update batch UI state based on file list count."""
+        count = self.batch_file_list.count()
+        has_files = count > 0
+
+        self.batch_start_btn.setEnabled(has_files)
+
+        # Update tab title with count
+        if has_files:
+            self.right_tabs.setTabText(1, f"Batch ({count})")
+            self.batch_info_label.setText(f"{count} file(s) ready for processing")
+        else:
+            self.right_tabs.setTabText(1, "Batch")
+            self.batch_info_label.setText("Drag files here or click Add Files...")
+
+    def _batch_drag_enter(self, event):
+        """Handle drag enter event for batch file list."""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def _batch_drag_move(self, event):
+        """Handle drag move event for batch file list."""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def _batch_drop(self, event):
+        """Handle drop event for batch file list."""
+        if event.mimeData().hasUrls():
+            valid_extensions = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
+            for url in event.mimeData().urls():
+                path = url.toLocalFile()
+                if path.lower().endswith(valid_extensions):
+                    self._add_file_to_batch_list(path)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def _start_batch_processing(self):
+        """Process all files in the batch list."""
+        # Get selection area (from current image or saved config)
+        selection = self.image_widget.get_selection()
+        if not selection:
+            # Try to load from config
+            saved_selection = self.config.get("screenshot_parser", "last_selection")
+            if saved_selection and len(saved_selection) == 4:
+                selection = tuple(saved_selection)
+            else:
+                QMessageBox.warning(
+                    self,
+                    "No Selection",
+                    "Please load an image and select a region first.\n\n"
+                    "The selection area will be used for all screenshots in the batch."
+                )
+                return
+
+        # Get API key
+        api_key = self.config.get_api_key()
+        if not api_key:
+            QMessageBox.warning(
+                self,
+                "No API Key",
+                "No API key configured. Please set API key in Configuration tab."
+            )
+            return
+
+        # Get file paths from list
+        file_count = self.batch_file_list.count()
+        if file_count == 0:
+            return
+
+        # Confirm batch processing
+        scan_location = self._get_current_scan_location()
+        loc_str = scan_location if scan_location else "(No Location)"
+        x1, y1, x2, y2 = selection
+
+        reply = QMessageBox.question(
+            self,
+            "Confirm Batch Process",
+            f"Process {file_count} screenshot(s)?\n\n"
+            f"Location: {loc_str}\n"
+            f"Selection: {x2-x1}x{y2-y1} at ({x1}, {y1})\n\n"
+            "Each screenshot will be parsed and added to the database.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # Create progress dialog
+        progress = QProgressDialog(
+            "Processing screenshots...",
+            "Cancel",
+            0,
+            file_count,
+            self
+        )
+        progress.setWindowTitle("Batch Processing")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+
+        # Process files (from end to start to avoid index shifting issues)
+        success_count = 0
+        error_count = 0
+        errors = []
+
+        # Build list of items to process
+        items_to_process = []
+        for i in range(file_count):
+            items_to_process.append((i, self.batch_file_list.item(i)))
+
+        for idx, (row_idx, item) in enumerate(items_to_process):
+            if progress.wasCanceled():
+                break
+
+            file_path = item.data(Qt.ItemDataRole.UserRole)
+            progress.setValue(idx)
+            progress.setLabelText(f"Processing {idx+1}/{file_count}:\n{file_path}")
+            QApplication.processEvents()
+
+            try:
+                # Load image
+                image = Image.open(file_path)
+
+                # Validate selection is within image bounds
+                if x2 > image.width or y2 > image.height:
+                    raise ValueError(
+                        f"Selection ({x2}x{y2}) exceeds image size ({image.width}x{image.height})"
+                    )
+
+                # Crop to selection
+                cropped = image.crop(selection)
+
+                # Parse via API
+                result = self.api_client.extract_mission_data(cropped, api_key)
+
+                if result.get("success"):
+                    mission_data = result["data"]
+
+                    # Apply fuzzy matching
+                    mission_data = self._apply_location_fuzzy_matching(mission_data)
+
+                    # Store in database
+                    scan_id = self.scan_db.add_scan(mission_data, scan_location)
+
+                    # Emit signal to update scan database tab
+                    scan_record = self.scan_db.get_scan(scan_id)
+                    if scan_record:
+                        self.scan_added.emit(scan_record)
+
+                    success_count += 1
+                    logger.info(f"Batch: Parsed {file_path} -> {scan_id[:8]}")
+
+                    # Mark item for removal (will remove after loop to avoid index issues)
+                    item.setData(Qt.ItemDataRole.UserRole + 1, "success")
+                else:
+                    error_msg = result.get("error", "Unknown error")
+                    errors.append(f"{file_path}: {error_msg}")
+                    error_count += 1
+                    logger.error(f"Batch: Failed to parse {file_path}: {error_msg}")
+
+                    # Mark item as failed (red text)
+                    item.setForeground(QColor("red"))
+                    item.setToolTip(f"Error: {error_msg}")
+
+            except Exception as e:
+                errors.append(f"{file_path}: {str(e)}")
+                error_count += 1
+                logger.error(f"Batch: Error processing {file_path}: {e}")
+
+                # Mark item as failed
+                item.setForeground(QColor("red"))
+                item.setToolTip(f"Error: {str(e)}")
+
+        progress.setValue(file_count)
+
+        # Remove successfully processed items (in reverse order)
+        for i in range(self.batch_file_list.count() - 1, -1, -1):
+            item = self.batch_file_list.item(i)
+            if item and item.data(Qt.ItemDataRole.UserRole + 1) == "success":
+                self.batch_file_list.takeItem(i)
+
+        self._update_batch_ui_state()
+
+        # Show summary
+        if progress.wasCanceled():
+            summary = f"Batch processing cancelled.\n\nProcessed: {success_count} successful, {error_count} failed"
+        else:
+            summary = f"Batch processing complete.\n\nSuccessful: {success_count}\nFailed: {error_count}"
+
+        if errors:
+            # Show first few errors
+            error_details = "\n".join(errors[:5])
+            if len(errors) > 5:
+                error_details += f"\n... and {len(errors) - 5} more errors"
+            summary += f"\n\nErrors:\n{error_details}"
+
+        QMessageBox.information(self, "Batch Complete", summary)
+
+        self.status_label.setText(f"Batch complete: {success_count} parsed, {error_count} failed")
+        logger.info(f"Batch processing complete: {success_count} success, {error_count} failed")
 
     def _load_from_file(self):
         """Load image from file dialog."""
@@ -539,7 +883,7 @@ class ScreenshotParserTab(QWidget):
 
         if index == 0:  # "-- Select Location --"
             self._scan_location = None
-        elif selected_text == NO_LOCATION_TEXT:
+        elif selected_text in (NO_LOCATION_TEXT, INTERSTELLAR_TEXT):
             self._scan_location = None
         else:
             self._scan_location = selected_text
@@ -549,7 +893,7 @@ class ScreenshotParserTab(QWidget):
         """Get the current scan location or None."""
         if self.location_combo.currentIndex() == 0:
             return None
-        if self.location_combo.currentText() == NO_LOCATION_TEXT:
+        if self.location_combo.currentText() in (NO_LOCATION_TEXT, INTERSTELLAR_TEXT):
             return None
         return self._scan_location
 
@@ -568,151 +912,6 @@ class ScreenshotParserTab(QWidget):
         """Parse the full image."""
         if self._current_image:
             self._do_parse(self._current_image)
-
-    def _batch_process(self):
-        """Batch process multiple screenshots with same location and selection."""
-        # Get selection area (from current image or saved config)
-        selection = self.image_widget.get_selection()
-        if not selection:
-            # Try to load from config
-            saved_selection = self.config.get("screenshot_parser", "last_selection")
-            if saved_selection and len(saved_selection) == 4:
-                selection = tuple(saved_selection)
-            else:
-                QMessageBox.warning(
-                    self,
-                    "No Selection",
-                    "Please load an image and select a region first.\n\n"
-                    "The selection area will be used for all screenshots in the batch."
-                )
-                return
-
-        # Get API key first
-        api_key = self.config.get_api_key()
-        if not api_key:
-            QMessageBox.warning(
-                self,
-                "No API Key",
-                "No API key configured. Please set API key in Configuration tab."
-            )
-            return
-
-        # Open file dialog for multiple files
-        file_paths, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Select Screenshots for Batch Processing",
-            "",
-            "Images (*.png *.jpg *.jpeg *.bmp *.webp);;All Files (*)"
-        )
-
-        if not file_paths:
-            return
-
-        # Confirm batch processing
-        scan_location = self._get_current_scan_location()
-        loc_str = scan_location if scan_location else "(No Location)"
-        x1, y1, x2, y2 = selection
-
-        reply = QMessageBox.question(
-            self,
-            "Confirm Batch Process",
-            f"Process {len(file_paths)} screenshot(s)?\n\n"
-            f"Location: {loc_str}\n"
-            f"Selection: {x2-x1}x{y2-y1} at ({x1}, {y1})\n\n"
-            "Each screenshot will be parsed and added to the database.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-
-        # Create progress dialog
-        progress = QProgressDialog(
-            "Processing screenshots...",
-            "Cancel",
-            0,
-            len(file_paths),
-            self
-        )
-        progress.setWindowTitle("Batch Processing")
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
-
-        # Process each file
-        success_count = 0
-        error_count = 0
-        errors = []
-
-        for i, file_path in enumerate(file_paths):
-            if progress.wasCanceled():
-                break
-
-            progress.setValue(i)
-            progress.setLabelText(f"Processing {i+1}/{len(file_paths)}:\n{file_path}")
-            QApplication.processEvents()
-
-            try:
-                # Load image
-                image = Image.open(file_path)
-
-                # Validate selection is within image bounds
-                if x2 > image.width or y2 > image.height:
-                    raise ValueError(
-                        f"Selection ({x2}x{y2}) exceeds image size ({image.width}x{image.height})"
-                    )
-
-                # Crop to selection
-                cropped = image.crop(selection)
-
-                # Parse via API
-                result = self.api_client.extract_mission_data(cropped, api_key)
-
-                if result.get("success"):
-                    mission_data = result["data"]
-
-                    # Apply fuzzy matching
-                    mission_data = self._apply_location_fuzzy_matching(mission_data)
-
-                    # Store in database
-                    scan_id = self.scan_db.add_scan(mission_data, scan_location)
-
-                    # Emit signal to update scan database tab
-                    scan_record = self.scan_db.get_scan(scan_id)
-                    if scan_record:
-                        self.scan_added.emit(scan_record)
-
-                    success_count += 1
-                    logger.info(f"Batch: Parsed {file_path} -> {scan_id[:8]}")
-                else:
-                    error_msg = result.get("error", "Unknown error")
-                    errors.append(f"{file_path}: {error_msg}")
-                    error_count += 1
-                    logger.error(f"Batch: Failed to parse {file_path}: {error_msg}")
-
-            except Exception as e:
-                errors.append(f"{file_path}: {str(e)}")
-                error_count += 1
-                logger.error(f"Batch: Error processing {file_path}: {e}")
-
-        progress.setValue(len(file_paths))
-
-        # Show summary
-        if progress.wasCanceled():
-            summary = f"Batch processing cancelled.\n\nProcessed: {success_count} successful, {error_count} failed"
-        else:
-            summary = f"Batch processing complete.\n\nSuccessful: {success_count}\nFailed: {error_count}"
-
-        if errors:
-            # Show first few errors
-            error_details = "\n".join(errors[:5])
-            if len(errors) > 5:
-                error_details += f"\n... and {len(errors) - 5} more errors"
-            summary += f"\n\nErrors:\n{error_details}"
-
-        QMessageBox.information(self, "Batch Complete", summary)
-
-        self.status_label.setText(f"Batch complete: {success_count} parsed, {error_count} failed")
-        logger.info(f"Batch processing complete: {success_count} success, {error_count} failed")
 
     def _do_parse(self, image: Image.Image):
         """Parse the given image."""

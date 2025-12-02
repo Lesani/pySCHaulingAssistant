@@ -30,6 +30,7 @@ logger = get_logger()
 # Constants
 LOCATION_TIMEOUT_MINUTES = 10
 NO_LOCATION_TEXT = "-- No Location --"
+INTERSTELLAR_TEXT = "-- INTERSTELLAR --"
 
 
 class CaptureTab(QWidget):
@@ -86,6 +87,7 @@ class CaptureTab(QWidget):
         self.location_combo.setMinimumWidth(200)
         self.location_combo.addItem("-- Select Location --")
         self.location_combo.addItem(NO_LOCATION_TEXT)
+        self.location_combo.addItem(INTERSTELLAR_TEXT)
         for loc in self.location_matcher.get_scannable_locations():
             self.location_combo.addItem(loc)
         self.location_combo.currentIndexChanged.connect(self._on_location_changed)
@@ -289,9 +291,9 @@ class CaptureTab(QWidget):
             self._show_no_location_warning()
             return
 
-        # Check if location is stale (but not if "No Location" is selected)
+        # Check if location is stale (but not if "No Location" or "INTERSTELLAR" is selected)
         if self._is_location_set() and self._is_location_stale():
-            if self.location_combo.currentText() != NO_LOCATION_TEXT:
+            if self.location_combo.currentText() not in (NO_LOCATION_TEXT, INTERSTELLAR_TEXT):
                 self._update_location_warning(True)
                 self.status_message.emit("Location is stale - select new location or click 'Parse Anyway'", 0)
                 return
@@ -517,8 +519,8 @@ class CaptureTab(QWidget):
             self.location_selected_time = None
             self.location_time_label.setText("")
             self._update_location_warning(False)
-        elif selected_text == NO_LOCATION_TEXT:
-            # "No Location" option - no timeout warning needed
+        elif selected_text in (NO_LOCATION_TEXT, INTERSTELLAR_TEXT):
+            # "No Location" or "INTERSTELLAR" option - no timeout warning needed
             self.scan_location = None
             self.location_selected_time = None
             self.location_time_label.setText("(no location tracking)")
@@ -535,8 +537,8 @@ class CaptureTab(QWidget):
         if not self._is_location_set():
             return
 
-        # Skip timeout check if "No Location" is selected
-        if self.location_combo.currentText() == NO_LOCATION_TEXT:
+        # Skip timeout check if "No Location" or "INTERSTELLAR" is selected
+        if self.location_combo.currentText() in (NO_LOCATION_TEXT, INTERSTELLAR_TEXT):
             return
 
         self._update_location_time_display()
@@ -612,7 +614,7 @@ class CaptureTab(QWidget):
         """Get the current scan location or None."""
         if self.location_combo.currentIndex() == 0:
             return None
-        if self.location_combo.currentText() == NO_LOCATION_TEXT:
+        if self.location_combo.currentText() in (NO_LOCATION_TEXT, INTERSTELLAR_TEXT):
             return None
         return self.scan_location
 
