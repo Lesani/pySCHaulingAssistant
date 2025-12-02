@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QTabWidget, QWidget, QVBoxLayout,
     QStatusBar, QMessageBox
 )
-from PyQt6.QtCore import Qt, QSettings, pyqtSignal
+from PyQt6.QtCore import Qt, QSettings, pyqtSignal, QTimer
 from PyQt6.QtGui import QIcon, QCloseEvent
 
 from src.config import Config
@@ -353,14 +353,8 @@ class MainWindow(QMainWindow):
             # Switch to capture tab if not already there
             self.tab_widget.setCurrentIndex(0)
 
-            # Trigger capture and extract
-            # Need to use QMetaObject.invokeMethod for thread-safe GUI updates
-            from PyQt6.QtCore import QMetaObject, Qt as QtCore
-            QMetaObject.invokeMethod(
-                self.capture_tab,
-                "_capture_and_extract",
-                QtCore.ConnectionType.QueuedConnection
-            )
+            # Use QTimer.singleShot for thread-safe GUI updates from hotkey thread
+            QTimer.singleShot(0, self.capture_tab._capture_and_extract)
         except Exception as e:
             logger.error(f"Error in capture hotkey: {e}")
 
@@ -368,14 +362,8 @@ class MainWindow(QMainWindow):
         """Handle save hotkey press."""
         logger.debug("Save hotkey triggered")
         try:
-            # Trigger save in capture tab
-            # Need to use QMetaObject.invokeMethod for thread-safe GUI updates
-            from PyQt6.QtCore import QMetaObject, Qt as QtCore
-            QMetaObject.invokeMethod(
-                self.capture_tab.validation_form,
-                "_save_mission",
-                QtCore.ConnectionType.QueuedConnection
-            )
+            # Use QTimer.singleShot for thread-safe GUI updates from hotkey thread
+            QTimer.singleShot(0, self.capture_tab.validation_form._save_mission)
         except Exception as e:
             logger.error(f"Error in save hotkey: {e}")
 
