@@ -9,8 +9,7 @@ from typing import List, Dict, Any
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
-    QRadioButton, QButtonGroup, QPushButton, QGroupBox,
-    QFrame
+    QPushButton, QGroupBox, QFrame
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -105,59 +104,36 @@ class WelcomeDialog(QDialog):
 
         layout.addWidget(ship_group)
 
-        # Session choice section (no group box for cleaner look)
-        session_label = QLabel("Session")
-        session_label.setStyleSheet("font-weight: bold; font-size: 13px; margin-top: 10px;")
-        layout.addWidget(session_label)
-
-        self.session_button_group = QButtonGroup(self)
-
-        # Continue option
-        self.continue_radio = QRadioButton("Continue previous session")
-        self.continue_radio.setChecked(True)
-        self.session_button_group.addButton(self.continue_radio, 0)
-        layout.addWidget(self.continue_radio)
-
-        # Continue description with session summary
-        if self.has_active_missions:
-            summary = self._get_session_summary()
-            continue_desc = QLabel(f"Resume with your existing missions and route\n{summary}")
-        else:
-            continue_desc = QLabel("No active missions found")
-        continue_desc.setStyleSheet("color: #888; font-size: 11px; margin-left: 26px; margin-bottom: 8px;")
-        continue_desc.setWordWrap(True)
-        layout.addWidget(continue_desc)
-
-        # Fresh start option
-        self.fresh_radio = QRadioButton("Start fresh")
-        self.session_button_group.addButton(self.fresh_radio, 1)
-        layout.addWidget(self.fresh_radio)
-
-        # Fresh description
-        fresh_desc = QLabel("Clear all missions and start a new hauling session")
-        fresh_desc.setStyleSheet("color: #888; font-size: 11px; margin-left: 26px;")
-        layout.addWidget(fresh_desc)
-
-        # If no active missions, select fresh by default
-        if not self.has_active_missions:
-            self.fresh_radio.setChecked(True)
-            self.continue_radio.setEnabled(False)
-
         # Spacer
         layout.addStretch()
 
-        # Buttons
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
+        # Session buttons - two big action buttons
+        session_label = QLabel("Start Session")
+        session_label.setStyleSheet("font-weight: bold; font-size: 13px; margin-top: 10px;")
+        layout.addWidget(session_label)
 
-        self.start_button = QPushButton("Start Hauling")
-        self.start_button.setMinimumWidth(150)
-        self.start_button.setMinimumHeight(40)
-        self.start_button.setProperty("class", "primary")
-        self.start_button.clicked.connect(self._on_start)
-        button_layout.addWidget(self.start_button)
+        # Continue Session button (if has active missions)
+        self.continue_btn = QPushButton("Continue Session")
+        self.continue_btn.setMinimumHeight(50)
+        self.continue_btn.setProperty("class", "primary")
+        self.continue_btn.clicked.connect(self._on_continue)
 
-        layout.addLayout(button_layout)
+        if self.has_active_missions:
+            summary = self._get_session_summary()
+            self.continue_btn.setText(f"Continue Session\n{summary}")
+        else:
+            self.continue_btn.setText("Continue Session\nNo active missions")
+            self.continue_btn.setEnabled(False)
+            self.continue_btn.setProperty("class", "secondary")
+
+        layout.addWidget(self.continue_btn)
+
+        # Start Fresh button
+        self.fresh_btn = QPushButton("Start Fresh\nClear all missions and start new")
+        self.fresh_btn.setMinimumHeight(50)
+        self.fresh_btn.setProperty("class", "secondary")
+        self.fresh_btn.clicked.connect(self._on_fresh)
+        layout.addWidget(self.fresh_btn)
 
         # Trigger initial ship info update
         self._on_ship_changed(self.ship_combo.currentIndex())
@@ -205,8 +181,6 @@ class WelcomeDialog(QDialog):
         total_missions = len(self.active_missions)
         total_scu = 0
         total_stops = 0
-        completed_pickups = 0
-        completed_deliveries = 0
 
         for mission in self.active_missions:
             objectives = mission.get("objectives", [])
@@ -220,26 +194,20 @@ class WelcomeDialog(QDialog):
 
                 if not pickup_done:
                     total_stops += 1
-                else:
-                    completed_pickups += 1
-
                 if not delivery_done:
                     total_stops += 1
-                else:
-                    completed_deliveries += 1
 
         # Build summary string
         parts = []
         parts.append(f"{total_missions} mission{'s' if total_missions != 1 else ''}")
-        parts.append(f"{total_stops} remaining stop{'s' if total_stops != 1 else ''}")
-        parts.append(f"{total_scu:,} SCU total")
+        parts.append(f"{total_stops} stop{'s' if total_stops != 1 else ''}")
+        parts.append(f"{total_scu:,} SCU")
 
         return " | ".join(parts)
 
-    def _on_start(self):
-        """Handle start button click."""
+    def _save_ship_config(self):
+        """Save ship selection to config."""
         self.selected_ship_key = self.ship_combo.currentData()
-        self.start_fresh = self.fresh_radio.isChecked()
 
         # Save ship selection to config
         self.config.set("route_planner", "selected_ship", value=self.selected_ship_key)
@@ -251,7 +219,18 @@ class WelcomeDialog(QDialog):
 
         self.config.save()
 
-        logger.info(f"Session started - Ship: {self.selected_ship_key}, Fresh start: {self.start_fresh}")
+    def _on_continue(self):
+        """Handle continue session button click."""
+        self._save_ship_config()
+        self.start_fresh = False
+        logger.info(f"Session continued - Ship: {self.selected_ship_key}")
+        self.accept()
+
+    def _on_fresh(self):
+        """Handle start fresh button click."""
+        self._save_ship_config()
+        self.start_fresh = True
+        logger.info(f"Fresh session started - Ship: {self.selected_ship_key}")
         self.accept()
 
     def get_ship_key(self) -> str:
