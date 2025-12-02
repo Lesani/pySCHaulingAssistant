@@ -17,6 +17,7 @@ class ShipManufacturer(Enum):
     """Ship manufacturers."""
     MISC = "MISC"
     CRUSADER = "Crusader Industries"
+    RSI = "Roberts Space Industries"
     ARGO = "Argo Astronautics"
     DRAKE = "Drake Interplanetary"
     ANVIL = "Anvil Aerospace"
@@ -78,9 +79,9 @@ SHIP_PROFILES: Dict[str, ShipProfile] = {
     "ARGO_RAFT": ShipProfile(
         name="RAFT",
         manufacturer=ShipManufacturer.ARGO,
-        cargo_capacity_scu=96,
+        cargo_capacity_scu=192,
         cargo_hold_type="external",
-        description="Compact single-seat cargo hauler with modular containers"
+        description="Compact single-seat cargo hauler with six 32 SCU containers"
     ),
     "MISC_HULL_A": ShipProfile(
         name="Hull A",
@@ -119,19 +120,19 @@ SHIP_PROFILES: Dict[str, ShipProfile] = {
         cargo_hold_type="grid",
         description="Data runner with significant cargo capacity"
     ),
-    "CRUSADER_ZEUS_MK2_CL": ShipProfile(
+    "RSI_ZEUS_MK2_CL": ShipProfile(
         name="Zeus Mk II CL",
-        manufacturer=ShipManufacturer.CRUSADER,
+        manufacturer=ShipManufacturer.RSI,
         cargo_capacity_scu=128,
         cargo_hold_type="grid",
-        description="Cargo-focused variant of the Zeus Mk II"
+        description="Medium freight hauler cargo variant"
     ),
     "MISC_HULL_B": ShipProfile(
         name="Hull B",
         manufacturer=ShipManufacturer.MISC,
-        cargo_capacity_scu=384,
+        cargo_capacity_scu=512,
         cargo_hold_type="external",
-        description="Small-scale commercial freighter"
+        description="Small-scale commercial freighter with 16 containers"
     ),
 
     # Large haulers
@@ -145,7 +146,7 @@ SHIP_PROFILES: Dict[str, ShipProfile] = {
     "CRUSADER_M2_HERCULES": ShipProfile(
         name="M2 Hercules",
         manufacturer=ShipManufacturer.CRUSADER,
-        cargo_capacity_scu=468,
+        cargo_capacity_scu=522,
         cargo_hold_type="vehicle",
         description="Military cargo transport"
     ),
@@ -162,20 +163,20 @@ SHIP_PROFILES: Dict[str, ShipProfile] = {
     "MISC_HULL_D": ShipProfile(
         name="Hull D",
         manufacturer=ShipManufacturer.MISC,
-        cargo_capacity_scu=20736,
+        cargo_capacity_scu=6912,
         cargo_hold_type="external",
         can_land_on_outposts=False,
         can_land_on_stations=False,  # Requires station docking
-        description="Capital-class bulk freighter"
+        description="Capital-class bulk freighter with 216 containers"
     ),
     "MISC_HULL_E": ShipProfile(
         name="Hull E",
         manufacturer=ShipManufacturer.MISC,
-        cargo_capacity_scu=98304,
+        cargo_capacity_scu=12288,
         cargo_hold_type="external",
         can_land_on_outposts=False,
         can_land_on_stations=False,
-        description="Super-freighter for massive cargo operations"
+        description="Super-freighter with 384 containers"
     ),
 }
 
