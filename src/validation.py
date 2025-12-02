@@ -80,6 +80,14 @@ MISSION_SCHEMA = {
                     "mission_id": {
                         "type": "string",
                         "description": "Parent mission ID (added automatically)"
+                    },
+                    "pickup_completed": {
+                        "type": "boolean",
+                        "description": "Whether cargo has been picked up"
+                    },
+                    "delivery_completed": {
+                        "type": "boolean",
+                        "description": "Whether cargo has been delivered"
                     }
                 },
                 "additionalProperties": False
@@ -201,7 +209,7 @@ def sanitize_mission(mission_data: Dict[str, Any]) -> Dict[str, Any]:
             logger.warning(f"Could not convert reward '{sanitized['reward']}' to float")
 
     # Sanitize objectives
-    allowed_obj_fields = {"collect_from", "cargo_type", "scu_amount", "deliver_to", "mission_id"}
+    allowed_obj_fields = {"collect_from", "cargo_type", "scu_amount", "deliver_to", "mission_id", "pickup_completed", "delivery_completed"}
     sanitized_objectives = []
 
     for obj in sanitized.get("objectives", []):

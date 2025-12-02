@@ -185,21 +185,16 @@ class ConfigTab(QWidget):
         self.ship_combo.currentTextChanged.connect(self._on_ship_changed)
         route_layout.addRow("Ship:", ship_layout)
 
-        # Optimization level
-        self.optimization_combo = QComboBox()
-        self.optimization_combo.addItems(["Basic", "Medium", "Advanced"])
-        self.optimization_combo.setMinimumWidth(150)
-        route_layout.addRow("Optimization Level:", self.optimization_combo)
-
-        # Algorithm selection
-        self.algorithm_combo = QComboBox()
-        self.algorithm_combo.addItems(["VRP Solver", "Dynamic (Regret-2 + ALNS)"])
-        self.algorithm_combo.setMinimumWidth(200)
-        self.algorithm_combo.setToolTip(
-            "VRP Solver: Fast heuristic\n"
-            "Dynamic: Advanced Regret-2 + ALNS (slower but may find better routes)"
+        # Route quality preset (combines algorithm + optimization level)
+        self.route_quality_combo = QComboBox()
+        self.route_quality_combo.addItems(["Fast", "Balanced", "Best"])
+        self.route_quality_combo.setMinimumWidth(150)
+        self.route_quality_combo.setToolTip(
+            "Fast: Quick results (~200ms)\n"
+            "Balanced: Good quality (~500ms)\n"
+            "Best: Maximum optimization (~3s)"
         )
-        route_layout.addRow("Algorithm:", self.algorithm_combo)
+        route_layout.addRow("Route Quality:", self.route_quality_combo)
 
         route_group.setLayout(route_layout)
         content_layout.addWidget(route_group)
@@ -400,11 +395,8 @@ class ConfigTab(QWidget):
             self.ship_combo.setCurrentText(saved_ship)
         self._update_ship_capacity()
 
-        optimization_level = self.config.get("route_planner", "optimization_level", default="medium")
-        self.optimization_combo.setCurrentText(optimization_level.capitalize())
-
-        algorithm = self.config.get("route_planner", "algorithm", default="VRP Solver")
-        self.algorithm_combo.setCurrentText(algorithm)
+        route_quality = self.config.get("route_planner", "route_quality", default="best")
+        self.route_quality_combo.setCurrentText(route_quality.capitalize())
 
         logger.debug("Configuration loaded")
 
@@ -620,8 +612,7 @@ class ConfigTab(QWidget):
                 capacity = 96
             self.config.settings["route_planner"]["ship_capacity"] = capacity
 
-            self.config.settings["route_planner"]["optimization_level"] = self.optimization_combo.currentText().lower()
-            self.config.settings["route_planner"]["algorithm"] = self.algorithm_combo.currentText()
+            self.config.settings["route_planner"]["route_quality"] = self.route_quality_combo.currentText().lower()
 
             # Save to file
             self.config.save()

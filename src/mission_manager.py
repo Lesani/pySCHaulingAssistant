@@ -151,6 +151,57 @@ class MissionManager:
                 return True
         return False
 
+    def update_objective_completion(self, mission_id: str, collect_from: str, deliver_to: str,
+                                     pickup_completed: bool = None,
+                                     delivery_completed: bool = None) -> bool:
+        """
+        Update completion status of a specific objective.
+
+        Args:
+            mission_id: UUID of the mission
+            collect_from: Pickup location (part of unique identifier)
+            deliver_to: Delivery location (part of unique identifier)
+            pickup_completed: Set pickup completion status (None to leave unchanged)
+            delivery_completed: Set delivery completion status (None to leave unchanged)
+
+        Returns:
+            True if updated, False if not found
+        """
+        for mission in self.missions:
+            if mission["id"] == mission_id:
+                for objective in mission.get("objectives", []):
+                    if objective.get("collect_from") == collect_from and objective.get("deliver_to") == deliver_to:
+                        if pickup_completed is not None:
+                            objective["pickup_completed"] = pickup_completed
+                        if delivery_completed is not None:
+                            objective["delivery_completed"] = delivery_completed
+                        self.save()
+                        logger.debug(f"Updated objective {mission_id}:{collect_from}->{deliver_to} - pickup={pickup_completed}, delivery={delivery_completed}")
+                        return True
+        return False
+
+    def get_objective_completion(self, mission_id: str, collect_from: str, deliver_to: str) -> tuple:
+        """
+        Get completion status of a specific objective.
+
+        Args:
+            mission_id: UUID of the mission
+            collect_from: Pickup location (part of unique identifier)
+            deliver_to: Delivery location (part of unique identifier)
+
+        Returns:
+            (pickup_completed, delivery_completed) tuple, or (False, False) if not found
+        """
+        for mission in self.missions:
+            if mission["id"] == mission_id:
+                for objective in mission.get("objectives", []):
+                    if objective.get("collect_from") == collect_from and objective.get("deliver_to") == deliver_to:
+                        return (
+                            objective.get("pickup_completed", False),
+                            objective.get("delivery_completed", False)
+                        )
+        return (False, False)
+
     def clear_all(self, status_filter: Optional[str] = None) -> int:
         """
         Clear all missions or missions with specific status.

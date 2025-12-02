@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QLabel, QComboBox, QGroupBox, QMessageBox, QTreeWidget,
     QTreeWidgetItem, QMenu, QHeaderView, QStyledItemDelegate
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QBrush, QAction, QPainter
 
 from src.config import Config
@@ -18,6 +18,108 @@ from src.route_optimizer import RouteOptimizer
 from src.logger import get_logger
 
 logger = get_logger()
+
+
+class RouteOptimizerWorker(QThread):
+    """Background worker for route optimization."""
+
+    finished = pyqtSignal(object, str)  # (route, status_message)
+    error = pyqtSignal(str, str)  # (error_message, fallback_status)
+
+    def __init__(self, missions, ship_capacity, quality):
+        super().__init__()
+        self.missions = missions
+        self.ship_capacity = ship_capacity
+        self.quality = quality.lower()
+
+    def run(self):
+        """Run optimization in background thread."""
+        try:
+            # Filter out objectives that have already been picked up
+            # These are "in cargo hold" and don't need pickup stops
+            filtered_missions = []
+            for m in self.missions:
+                incomplete_objectives = [
+                    obj for obj in m.get('objectives', [])
+                    if not obj.get('pickup_completed', False)
+                ]
+                if incomplete_objectives:
+                    filtered_mission = m.copy()
+                    filtered_mission['objectives'] = incomplete_objectives
+                    filtered_missions.append(filtered_mission)
+
+            if self.quality == "fast":
+                # Fast: VRP Solver with medium optimization (~200ms)
+                route = RouteOptimizer.create_vrp_route(
+                    filtered_missions,
+                    ship_capacity=self.ship_capacity,
+                    starting_location=None,
+                    optimization_level="medium"
+                )
+                self.finished.emit(route, "Optimized (Fast)")
+
+            elif self.quality in ("balanced", "best"):
+                # Balanced/Best: Dynamic solver
+                try:
+                    from src.services.dynamic_vrp_solver import DynamicVRPSolver
+                    from src.domain.models import Mission, Objective
+
+                    # Convert filtered mission dicts to Mission objects
+                    mission_objects = []
+                    for m in filtered_missions:
+                        objectives = [Objective.from_dict(obj) if isinstance(obj, dict) else obj
+                                     for obj in m.get('objectives', [])]
+                        mission_obj = Mission(
+                            reward=m['reward'],
+                            availability=m.get('availability', 'N/A'),
+                            objectives=objectives,
+                            id=m.get('id'),
+                            timestamp=m.get('timestamp'),
+                            status=m.get('status', 'active')
+                        )
+                        mission_objects.append(mission_obj)
+
+                    solver = DynamicVRPSolver(
+                        ship_capacity=self.ship_capacity,
+                        starting_location=None
+                    )
+
+                    # Balanced = medium optimization (~500ms), Best = advanced (~3s)
+                    opt_level = "medium" if self.quality == "balanced" else "advanced"
+                    time_budget = 500 if self.quality == "balanced" else 3000
+
+                    route = solver.solve(
+                        missions=mission_objects,
+                        optimization_level=opt_level,
+                        time_budget_ms=time_budget
+                    )
+                    self.finished.emit(route, f"Optimized ({self.quality.capitalize()})")
+
+                except Exception as solver_error:
+                    logger.error(f"Dynamic solver failed: {solver_error}", exc_info=True)
+                    # Fallback to VRP solver
+                    route = RouteOptimizer.create_vrp_route(
+                        filtered_missions,
+                        ship_capacity=self.ship_capacity,
+                        starting_location=None,
+                        optimization_level="advanced"
+                    )
+                    self.error.emit(str(solver_error), "Optimized (VRP fallback)")
+                    self.finished.emit(route, "Optimized (VRP fallback)")
+
+            else:
+                # Unknown quality, default to VRP medium
+                route = RouteOptimizer.create_vrp_route(
+                    filtered_missions,
+                    ship_capacity=self.ship_capacity,
+                    starting_location=None,
+                    optimization_level="medium"
+                )
+                self.finished.emit(route, "Optimized")
+
+        except Exception as e:
+            logger.error(f"Route optimization failed: {e}", exc_info=True)
+            self.error.emit(str(e), "")
 
 
 class ColoredItemDelegate(QStyledItemDelegate):
@@ -61,11 +163,11 @@ class RoutePlannerTab(QWidget):
 
         # State
         self.selected_ship_capacity = config.get("route_planner", "ship_capacity", default=96)
-        self.optimization_level = config.get("route_planner", "optimization_level", default="medium")
+        self.route_quality = config.get("route_planner", "route_quality", default="best")
         self.current_route = None
-        self.completed_stops = set()  # Track completed stop numbers
-        self.completed_missions = set()  # Track completed mission IDs
-        self.completed_deliveries = set()  # Track completed deliveries as (mission_id, deliver_to) tuples
+        self.completed_stops = set()  # Track completed stop numbers (rebuilt from mission data)
+        self._optimization_generation = 0  # Counter to ignore stale results
+        self._active_workers = []  # Keep references to prevent garbage collection
 
         self._setup_ui()
 
@@ -165,7 +267,7 @@ class RoutePlannerTab(QWidget):
         layout.addWidget(route_group)
 
     def refresh(self):
-        """Refresh and optimize route."""
+        """Refresh and optimize route in background thread."""
         missions = self.mission_manager.get_missions(status="active")
 
         if not missions:
@@ -173,97 +275,182 @@ class RoutePlannerTab(QWidget):
             self.status_label.setText("No missions to plan")
             return
 
-        try:
-            # Get algorithm from config
-            algorithm = self.config.get("route_planner", "algorithm", default="VRP Solver")
+        # Increment generation to ignore results from any previous workers
+        self._optimization_generation += 1
+        current_generation = self._optimization_generation
 
-            # Generate optimized route based on selected algorithm
-            if algorithm == "Dynamic (Regret-2 + ALNS)":
-                try:
-                    # Use dynamic VRP solver
-                    from src.services.dynamic_vrp_solver import DynamicVRPSolver
-                    from src.domain.models import Mission, Objective
+        # Show optimizing status
+        self.status_label.setText("Optimizing...")
 
-                    # Convert mission dicts to Mission objects
-                    # Need to properly convert objectives from dicts to Objective objects
-                    mission_objects = []
-                    for m in missions:
-                        # Convert objective dicts to Objective objects
-                        objectives = [Objective.from_dict(obj) if isinstance(obj, dict) else obj
-                                     for obj in m.get('objectives', [])]
+        # Start background optimization
+        worker = RouteOptimizerWorker(
+            missions=missions,
+            ship_capacity=self.selected_ship_capacity,
+            quality=self.route_quality
+        )
 
-                        # Create Mission with converted objectives
-                        mission_obj = Mission(
-                            reward=m['reward'],
-                            availability=m.get('availability', 'N/A'),
-                            objectives=objectives,
-                            id=m.get('id'),
-                            timestamp=m.get('timestamp'),
-                            status=m.get('status', 'active')
-                        )
-                        mission_objects.append(mission_obj)
+        # Keep reference to prevent garbage collection
+        self._active_workers.append(worker)
 
-                    # Use advanced optimization level for dynamic solver
-                    solver = DynamicVRPSolver(
-                        ship_capacity=self.selected_ship_capacity,
-                        starting_location=None
-                    )
+        # Use lambdas to capture current generation
+        worker.finished.connect(
+            lambda route, msg, gen=current_generation: self._on_optimization_finished(route, msg, gen)
+        )
+        worker.error.connect(
+            lambda err, status, gen=current_generation: self._on_optimization_error(err, status, gen)
+        )
 
-                    # Set optimization level (use selected level)
-                    opt_level = self.optimization_level
-                    self.current_route = solver.solve(
-                        missions=mission_objects,
-                        optimization_level=opt_level,
-                        time_budget_ms=3000  # 3 seconds for optimization
-                    )
+        # Clean up worker when done
+        worker.finished.connect(lambda: self._cleanup_worker(worker))
 
-                    self.status_label.setText(f"Optimized using {algorithm}")
+        worker.start()
 
-                except Exception as solver_error:
-                    logger.error(f"Dynamic solver failed: {solver_error}", exc_info=True)
-                    logger.info("Falling back to standard VRP solver")
+    def _cleanup_worker(self, worker):
+        """Remove finished worker from active list."""
+        if worker in self._active_workers:
+            self._active_workers.remove(worker)
+        worker.deleteLater()
 
-                    # Fallback to standard VRP solver
-                    self.current_route = RouteOptimizer.create_vrp_route(
-                        missions,
-                        ship_capacity=self.selected_ship_capacity,
-                        starting_location=None,
-                        optimization_level=self.optimization_level
-                    )
+    def _on_optimization_finished(self, route, status_message, generation):
+        """Handle optimization completion."""
+        # Ignore stale results from old workers
+        if generation != self._optimization_generation:
+            return
 
-                    self.status_label.setText(f"Using VRP Solver (Dynamic solver failed)")
-                    QMessageBox.warning(
-                        self,
-                        "Solver Fallback",
-                        f"Dynamic solver encountered an error. Falling back to standard VRP solver.\n\nError: {str(solver_error)}"
-                    )
-            else:
-                # Use existing VRP solver
-                self.current_route = RouteOptimizer.create_vrp_route(
-                    missions,
-                    ship_capacity=self.selected_ship_capacity,
-                    starting_location=None,
-                    optimization_level=self.optimization_level
+        # Merge in-hold cargo deliveries into the route
+        self.current_route = self._merge_inhold_deliveries(route)
+        self._rebuild_completed_stops()
+        self.status_label.setText(status_message)
+        self._update_route_display()
+        logger.info(f"Route optimized: {len(self.current_route.stops)} stops - {status_message}")
+
+    def _merge_inhold_deliveries(self, route):
+        """
+        Add deliveries for cargo in hold to the appropriate stops.
+
+        Cargo in hold = objectives where pickup_completed=True but delivery_completed=False.
+        These need delivery stops but not pickup stops.
+        """
+        cargo_in_hold = self._get_cargo_in_hold()
+        if not cargo_in_hold:
+            return route
+
+        from src.domain.models import Objective
+
+        # Group in-hold cargo by delivery destination
+        by_destination = {}
+        for obj_dict in cargo_in_hold:
+            dest = obj_dict.get('deliver_to', '')
+            if dest not in by_destination:
+                by_destination[dest] = []
+            # Convert dict to Objective for consistency
+            obj = Objective(
+                collect_from=obj_dict.get('collect_from', ''),
+                deliver_to=dest,
+                scu_amount=obj_dict.get('scu_amount', 0),
+                cargo_type=obj_dict.get('cargo_type', 'Unknown'),
+                mission_id=obj_dict.get('mission_id')
+            )
+            by_destination[dest].append(obj)
+
+        # Add deliveries to existing stops or create new stops
+        from src.domain.models import Stop, Route
+
+        new_stops = list(route.stops)
+
+        for dest, deliveries in by_destination.items():
+            # Find existing stop at this destination
+            found = False
+            for stop in new_stops:
+                if stop.location == dest:
+                    # Add deliveries to existing stop
+                    stop.deliveries.extend(deliveries)
+                    found = True
+                    break
+
+            if not found:
+                # Create new stop for these deliveries
+                new_stop = Stop(
+                    location=dest,
+                    stop_number=len(new_stops) + 1,
+                    pickups=[],
+                    deliveries=deliveries,
+                    cargo_before=0,
+                    cargo_after=0
                 )
+                new_stops.append(new_stop)
 
-                self.status_label.setText(f"Optimized using VRP Solver")
+        # Renumber stops
+        for i, stop in enumerate(new_stops):
+            stop.stop_number = i + 1
 
-            # Update display
-            self._update_route_display()
+        return Route(stops=new_stops)
 
-            logger.info(f"Route optimized with {algorithm}: {len(self.current_route.stops)} stops")
+    def _rebuild_completed_stops(self):
+        """Rebuild completed_stops from mission objective completion data."""
+        self.completed_stops.clear()
+        if not self.current_route:
+            return
 
-        except Exception as e:
-            logger.error(f"Route optimization failed: {e}", exc_info=True)
+        for i, stop in enumerate(self.current_route.stops):
+            stop_num = i + 1
+            stop_complete = True
 
-            # Clear display on complete failure
+            # Check all pickups at this stop
+            for pickup in stop.pickups:
+                if hasattr(pickup, 'mission_id') and pickup.mission_id:
+                    pickup_done, _ = self.mission_manager.get_objective_completion(
+                        pickup.mission_id, pickup.collect_from, pickup.deliver_to
+                    )
+                    if not pickup_done:
+                        stop_complete = False
+                        break
+
+            # Check all deliveries at this stop
+            if stop_complete:
+                for delivery in stop.deliveries:
+                    if hasattr(delivery, 'mission_id') and delivery.mission_id:
+                        _, delivery_done = self.mission_manager.get_objective_completion(
+                            delivery.mission_id, delivery.collect_from, delivery.deliver_to
+                        )
+                        if not delivery_done:
+                            stop_complete = False
+                            break
+
+            # Stop is complete only if it has actions and all are done
+            if stop_complete and (stop.pickups or stop.deliveries):
+                self.completed_stops.add(stop_num)
+
+    def _get_cargo_in_hold(self):
+        """Get objectives that are picked up but not yet delivered (in cargo hold)."""
+        in_hold = []
+        for mission in self.mission_manager.get_missions(status="active"):
+            for obj in mission.get("objectives", []):
+                if obj.get("pickup_completed") and not obj.get("delivery_completed"):
+                    in_hold.append(obj)
+        return in_hold
+
+    def _on_optimization_error(self, error_message, fallback_status, generation):
+        """Handle optimization error."""
+        # Ignore stale errors from old workers
+        if generation != self._optimization_generation:
+            return
+
+        if not fallback_status:
+            # Complete failure, no fallback
             self.route_tree.clear()
             self.status_label.setText("Optimization failed")
-
             QMessageBox.critical(
                 self,
                 "Optimization Error",
-                f"Failed to optimize route:\n{str(e)}\n\nThe application will continue running."
+                f"Failed to optimize route:\n{error_message}\n\nThe application will continue running."
+            )
+        else:
+            # Fallback was used, just warn
+            QMessageBox.warning(
+                self,
+                "Solver Fallback",
+                f"Dynamic solver failed. Using VRP solver.\n\nError: {error_message}"
             )
 
     def _find_delivery_stop_number(self, destination: str, current_stop: int) -> int:
@@ -349,10 +536,38 @@ class RoutePlannerTab(QWidget):
         """Update the route tree display."""
         self.route_tree.clear()
 
+        # Get cargo in hold (picked up but not delivered)
+        cargo_in_hold = self._get_cargo_in_hold()
+        current_cargo = sum(obj.get('scu_amount', 0) for obj in cargo_in_hold)
+
+        # Show "In Cargo Hold" section if there's cargo
+        if cargo_in_hold:
+            hold_item = QTreeWidgetItem(self.route_tree)
+            hold_item.setText(0, "")
+            hold_item.setText(1, "In Hold")
+            hold_item.setText(2, "Cargo Hold")
+            hold_total_scu = sum(obj.get('scu_amount', 0) for obj in cargo_in_hold)
+            hold_item.setText(3, f"Loaded: {hold_total_scu} SCU")
+            cargo_pct = (hold_total_scu / self.selected_ship_capacity * 100) if self.selected_ship_capacity > 0 else 0
+            hold_item.setText(4, f"{hold_total_scu} SCU ({cargo_pct:.0f}%)")
+
+            # Style the hold section
+            for col in range(5):
+                hold_item.setForeground(col, QBrush(QColor("#4caf50")))  # Green
+
+            # Add detail rows for cargo in hold
+            for obj in cargo_in_hold:
+                detail_item = QTreeWidgetItem(hold_item)
+                detail_item.setText(2, f"  ✓ {obj.get('scu_amount', 0)} SCU {obj.get('cargo_type', 'Unknown')}")
+                detail_item.setText(3, f"→ Deliver to {obj.get('deliver_to', '?')}")
+                for col in range(5):
+                    detail_item.setForeground(col, QBrush(QColor("#808080")))
+
+            hold_item.setExpanded(False)  # Collapsed by default
+
         if not self.current_route:
             return
 
-        current_cargo = 0
         total_reward = 0
 
         for i, stop in enumerate(self.current_route.stops, 1):
@@ -435,11 +650,12 @@ class RoutePlannerTab(QWidget):
             # Auto-collapse completed stops, keep pending stops expanded
             stop_item.setExpanded(not is_complete)
 
-        # Update status
+        # Update status - count completed missions from mission manager
         completed = len(self.completed_stops)
         total = len(self.current_route.stops)
+        completed_missions = len(self.mission_manager.get_missions(status="completed"))
         self.status_label.setText(
-            f"Progress: {completed}/{total} stops  |  {len(self.completed_missions)} missions done"
+            f"Progress: {completed}/{total} stops  |  {completed_missions} missions done"
         )
 
     def _toggle_stop_completion(self, item: QTreeWidgetItem, column: int):
@@ -449,62 +665,82 @@ class RoutePlannerTab(QWidget):
             return  # Detail row clicked
 
         if stop_num in self.completed_stops:
-            self.completed_stops.remove(stop_num)
+            self._uncomplete_stop(stop_num)
         else:
             self._complete_stop_and_missions(stop_num)
 
         self._update_route_display()
 
+    def _uncomplete_stop(self, stop_num: int):
+        """Mark stop as incomplete and update objective completion in missions."""
+        self.completed_stops.discard(stop_num)
+
+        if not self.current_route or stop_num > len(self.current_route.stops):
+            return
+
+        stop = self.current_route.stops[stop_num - 1]
+
+        # Mark all pickups at this stop as not completed
+        for pickup in stop.pickups:
+            if hasattr(pickup, 'mission_id') and pickup.mission_id:
+                self.mission_manager.update_objective_completion(
+                    pickup.mission_id, pickup.collect_from, pickup.deliver_to, pickup_completed=False
+                )
+
+        # Mark all deliveries at this stop as not completed
+        for delivery in stop.deliveries:
+            if hasattr(delivery, 'mission_id') and delivery.mission_id:
+                self.mission_manager.update_objective_completion(
+                    delivery.mission_id, delivery.collect_from, delivery.deliver_to, delivery_completed=False
+                )
+
     def _complete_stop_and_missions(self, stop_num: int):
-        """Mark stop complete and complete associated missions."""
+        """Mark stop complete and update objective completion in missions."""
         self.completed_stops.add(stop_num)
 
-        # Find missions at this stop and check if they're fully completed
-        if self.current_route and stop_num <= len(self.current_route.stops):
-            stop = self.current_route.stops[stop_num - 1]
+        if not self.current_route or stop_num > len(self.current_route.stops):
+            return
 
-            # Track which deliveries were completed at this stop
-            missions_with_deliveries = {}  # mission_id -> set of delivery locations
+        stop = self.current_route.stops[stop_num - 1]
+        affected_missions = set()
 
-            for delivery in stop.deliveries:
-                if hasattr(delivery, 'mission_id') and delivery.mission_id:
-                    mission_id = delivery.mission_id
-                    deliver_to = delivery.deliver_to
+        # Mark all pickups at this stop as completed
+        for pickup in stop.pickups:
+            if hasattr(pickup, 'mission_id') and pickup.mission_id:
+                self.mission_manager.update_objective_completion(
+                    pickup.mission_id, pickup.collect_from, pickup.deliver_to, pickup_completed=True
+                )
+                affected_missions.add(pickup.mission_id)
 
-                    # Track this completed delivery
-                    self.completed_deliveries.add((mission_id, deliver_to))
+        # Mark all deliveries at this stop as completed
+        for delivery in stop.deliveries:
+            if hasattr(delivery, 'mission_id') and delivery.mission_id:
+                self.mission_manager.update_objective_completion(
+                    delivery.mission_id, delivery.collect_from, delivery.deliver_to, delivery_completed=True
+                )
+                affected_missions.add(delivery.mission_id)
 
-                    # Group deliveries by mission for checking completion
-                    if mission_id not in missions_with_deliveries:
-                        missions_with_deliveries[mission_id] = set()
-                    missions_with_deliveries[mission_id].add(deliver_to)
+        # Check if any affected missions are now fully complete
+        for mission_id in affected_missions:
+            self._check_mission_completion(mission_id)
 
-            # For each mission that had deliveries at this stop, check if ALL objectives are complete
-            for mission_id in missions_with_deliveries:
-                if mission_id not in self.completed_missions:
-                    # Get the full mission data to check all objectives
-                    missions = self.mission_manager.get_missions()
-                    mission = next((m for m in missions if m.get("id") == mission_id), None)
+    def _check_mission_completion(self, mission_id: str):
+        """Check if all objectives of a mission are complete and update status."""
+        mission = self.mission_manager.get_mission(mission_id)
+        if not mission:
+            return
 
-                    if mission:
-                        # Check if ALL delivery objectives of this mission are completed
-                        all_objectives = mission.get("objectives", [])
-                        all_completed = True
+        all_complete = True
+        for obj in mission.get("objectives", []):
+            pickup_done = obj.get("pickup_completed", False)
+            delivery_done = obj.get("delivery_completed", False)
+            if not (pickup_done and delivery_done):
+                all_complete = False
+                break
 
-                        for obj in all_objectives:
-                            obj_deliver_to = obj.get("deliver_to", "")
-                            # Check if this specific delivery has been completed
-                            if (mission_id, obj_deliver_to) not in self.completed_deliveries:
-                                all_completed = False
-                                break
-
-                        # Only mark mission as complete if ALL objectives are done
-                        if all_completed:
-                            self.completed_missions.add(mission_id)
-                            self.mission_manager.update_status(mission_id, "completed")
-                            logger.info(f"Marked mission {mission_id} as completed (all {len(all_objectives)} objectives delivered)")
-                        else:
-                            logger.debug(f"Mission {mission_id} not yet complete (partial deliveries done)")
+        if all_complete:
+            self.mission_manager.update_status(mission_id, "completed")
+            logger.info(f"Mission {mission_id} completed (all objectives done)")
 
     def _show_context_menu(self, position):
         """Show context menu for route stops."""
@@ -534,31 +770,35 @@ class RoutePlannerTab(QWidget):
         self._update_route_display()
 
     def _mark_incomplete(self, stop_num: int):
-        """Mark stop as incomplete (visual only)."""
-        if stop_num in self.completed_stops:
-            self.completed_stops.remove(stop_num)
+        """Mark stop as incomplete."""
+        self._uncomplete_stop(stop_num)
         self._update_route_display()
 
     def _reset_progress(self):
-        """Reset all progress tracking."""
+        """Reset all progress tracking for active missions."""
         reply = QMessageBox.question(
             self,
             "Reset Progress",
             "Reset all stop completion tracking?\n\n"
-            "Note: This won't undo mission completions in the Hauling tab.",
+            "This will clear pickup/delivery completion for all active missions.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
 
         if reply == QMessageBox.StandardButton.Yes:
             self.completed_stops.clear()
-            self.completed_deliveries.clear()
+            # Reset completion flags on all active mission objectives
+            for mission in self.mission_manager.get_missions(status="active"):
+                for obj in mission.get("objectives", []):
+                    obj["pickup_completed"] = False
+                    obj["delivery_completed"] = False
+                self.mission_manager.update_mission(mission["id"], mission)
             self._update_route_display()
             logger.info("Progress tracking reset")
 
     def reload_config(self):
         """Reload configuration (called when config is saved in Settings tab)."""
         self.selected_ship_capacity = self.config.get("route_planner", "ship_capacity", default=96)
-        self.optimization_level = self.config.get("route_planner", "optimization_level", default="medium")
+        self.route_quality = self.config.get("route_planner", "route_quality", default="best")
 
         # Update ship display
         ship_name = self.config.get("route_planner", "selected_ship", default="ARGO_RAFT")
