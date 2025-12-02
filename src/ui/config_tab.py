@@ -7,9 +7,9 @@ Settings for API provider, model selection, and application preferences.
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
     QLineEdit, QComboBox, QSpinBox, QCheckBox, QPushButton,
-    QLabel, QMessageBox
+    QLabel, QMessageBox, QScrollArea, QFrame
 )
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import pyqtSignal, Qt
 import os
 from typing import Optional, TYPE_CHECKING
 
@@ -45,6 +45,18 @@ class ConfigTab(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
+        # Create scroll area for all settings
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        # Content widget inside scroll area
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(0, 0, 8, 0)  # Right margin for scrollbar
+        content_layout.setSpacing(8)
+
         # API Settings Group
         api_group = QGroupBox("API Settings")
         api_layout = QFormLayout()
@@ -58,7 +70,8 @@ class ConfigTab(QWidget):
         # API Key
         self.api_key_edit = QLineEdit()
         self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.api_key_edit.setPlaceholderText("Enter API key or set environment variable")
+        self.api_key_edit.setPlaceholderText("Enter API key")
+        self.api_key_edit.setMinimumWidth(250)
 
         # Show/hide button
         api_key_layout = QHBoxLayout()
@@ -69,6 +82,10 @@ class ConfigTab(QWidget):
         self.show_key_btn.setProperty("class", "secondary")
         self.show_key_btn.clicked.connect(self._toggle_key_visibility)
         api_key_layout.addWidget(self.show_key_btn)
+
+        # Set stretch so line edit expands, button stays fixed
+        api_key_layout.setStretch(0, 1)
+        api_key_layout.setStretch(1, 0)
 
         api_layout.addRow("API Key:", api_key_layout)
 
@@ -81,6 +98,7 @@ class ConfigTab(QWidget):
         # Model selection
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
+        self.model_combo.setMinimumWidth(200)
         api_layout.addRow("Model:", self.model_combo)
 
         # Max tokens
@@ -90,7 +108,7 @@ class ConfigTab(QWidget):
         api_layout.addRow("Max Tokens:", self.max_tokens_spin)
 
         api_group.setLayout(api_layout)
-        layout.addWidget(api_group)
+        content_layout.addWidget(api_group)
 
         # UI Settings Group
         ui_group = QGroupBox("UI Settings")
@@ -108,7 +126,7 @@ class ConfigTab(QWidget):
         ui_layout.addRow("Preview Height:", self.canvas_height_spin)
 
         ui_group.setLayout(ui_layout)
-        layout.addWidget(ui_group)
+        content_layout.addWidget(ui_group)
 
         # Capture Settings Group
         capture_group = QGroupBox("Image Capture Settings")
@@ -133,7 +151,7 @@ class ConfigTab(QWidget):
         capture_layout.addRow("Default Gamma (×100):", self.gamma_spin)
 
         capture_group.setLayout(capture_layout)
-        layout.addWidget(capture_group)
+        content_layout.addWidget(capture_group)
 
         # Global Hotkeys Group
         hotkeys_group = QGroupBox("Global Hotkeys (System-wide)")
@@ -154,6 +172,7 @@ class ConfigTab(QWidget):
         capture_hotkey_layout = QHBoxLayout()
         self.capture_modifier_combo = QComboBox()
         self.capture_modifier_combo.addItems(["Shift", "Ctrl", "Alt", "Shift+Ctrl", "Shift+Alt", "Ctrl+Alt"])
+        self.capture_modifier_combo.setMinimumWidth(100)
         capture_hotkey_layout.addWidget(self.capture_modifier_combo)
         capture_hotkey_layout.addWidget(QLabel("+"))
         self.capture_key_combo = QComboBox()
@@ -161,13 +180,16 @@ class ConfigTab(QWidget):
             "Print Screen", "Enter", "Space", "F1", "F2", "F3", "F4",
             "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"
         ])
+        self.capture_key_combo.setMinimumWidth(120)
         capture_hotkey_layout.addWidget(self.capture_key_combo)
+        capture_hotkey_layout.addStretch()
         hotkeys_layout.addRow("Capture & Extract:", capture_hotkey_layout)
 
         # Save hotkey
         save_hotkey_layout = QHBoxLayout()
         self.save_modifier_combo = QComboBox()
         self.save_modifier_combo.addItems(["Shift", "Ctrl", "Alt", "Shift+Ctrl", "Shift+Alt", "Ctrl+Alt"])
+        self.save_modifier_combo.setMinimumWidth(100)
         save_hotkey_layout.addWidget(self.save_modifier_combo)
         save_hotkey_layout.addWidget(QLabel("+"))
         self.save_key_combo = QComboBox()
@@ -175,11 +197,13 @@ class ConfigTab(QWidget):
             "Enter", "Space", "Print Screen", "F1", "F2", "F3", "F4",
             "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"
         ])
+        self.save_key_combo.setMinimumWidth(120)
         save_hotkey_layout.addWidget(self.save_key_combo)
+        save_hotkey_layout.addStretch()
         hotkeys_layout.addRow("Add to List:", save_hotkey_layout)
 
         hotkeys_group.setLayout(hotkeys_layout)
-        layout.addWidget(hotkeys_group)
+        content_layout.addWidget(hotkeys_group)
 
         # Cloud Sync Settings Group
         sync_group = QGroupBox("Cloud Sync Settings")
@@ -197,6 +221,7 @@ class ConfigTab(QWidget):
         # API URL
         self.sync_url_edit = QLineEdit()
         self.sync_url_edit.setPlaceholderText("https://your-sync-server.example.com")
+        self.sync_url_edit.setMinimumWidth(300)
         sync_layout.addRow("Sync API URL:", self.sync_url_edit)
 
         # Discord Authentication section
@@ -232,11 +257,15 @@ class ConfigTab(QWidget):
         sync_layout.addRow("", test_btn_layout)
 
         sync_group.setLayout(sync_layout)
-        layout.addWidget(sync_group)
+        content_layout.addWidget(sync_group)
 
-        layout.addStretch()
+        content_layout.addStretch()
 
-        # Action buttons
+        # Finalize scroll area
+        scroll.setWidget(content_widget)
+        layout.addWidget(scroll, 1)  # stretch=1 so scroll takes available space
+
+        # Action buttons (outside scroll area, always visible at bottom)
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
@@ -392,7 +421,9 @@ class ConfigTab(QWidget):
                 "claude-3-opus-20240229",
                 "claude-3-haiku-20240307"
             ])
-            self.env_var_label.setText("Set ANTHROPIC_API_KEY environment variable")
+            self.env_var_label.setText(
+                "Key saved to config.json. Can also use ANTHROPIC_API_KEY env var."
+            )
 
             # Load saved model for this provider
             saved_model = self.config.get("api", "anthropic", "default_model", default="claude-sonnet-4-5")
@@ -405,7 +436,9 @@ class ConfigTab(QWidget):
                 "openai/gpt-4-turbo",
                 "google/gemini-pro-1.5"
             ])
-            self.env_var_label.setText("Set OPENROUTER_API_KEY environment variable")
+            self.env_var_label.setText(
+                "Key saved to config.json. Can also use OPENROUTER_API_KEY env var."
+            )
 
             # Load saved model for this provider
             saved_model = self.config.get("api", "openrouter", "default_model", default="qwen/qwen3-vl-8b-instruct")
@@ -438,11 +471,13 @@ class ConfigTab(QWidget):
             self.config.settings["api"][provider]["default_model"] = self.model_combo.currentText()
             self.config.settings["api"]["max_tokens"] = self.max_tokens_spin.value()
 
-            # Note: We don't save API key to config file, only to environment
+            # Save API key to config file
             api_key = self.api_key_edit.text().strip()
             if api_key:
-                env_var = "ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENROUTER_API_KEY"
-                os.environ[env_var] = api_key
+                self.config.settings["api"]["api_key"] = api_key
+            else:
+                # Clear stored key if field is empty
+                self.config.settings["api"].pop("api_key", None)
 
             # UI settings
             if "ui" not in self.config.settings:

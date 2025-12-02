@@ -80,7 +80,13 @@ class Config:
         return result
 
     def get_api_key(self) -> str:
-        """Get API key from environment variable."""
+        """Get API key from config file or environment variable."""
+        # First check config file
+        stored_key = self.settings.get("api", {}).get("api_key", "")
+        if stored_key:
+            return stored_key
+
+        # Fall back to environment variable
         provider = self.settings["api"]["provider"]
         if provider == "anthropic":
             return os.environ.get("ANTHROPIC_API_KEY", "")
