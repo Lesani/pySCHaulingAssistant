@@ -116,7 +116,7 @@ class MainWindow(QMainWindow):
             self.config,
             self.mission_manager
         )
-        self.scan_database_tab = ScanDatabaseTab(self.scan_db, self.config, self.discord_auth)
+        self.scan_database_tab = ScanDatabaseTab(self.scan_db, self.config, self.discord_auth, self.location_matcher)
         self.screenshot_parser_tab = ScreenshotParserTab(
             self.config,
             self.api_client,

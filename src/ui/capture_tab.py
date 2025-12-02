@@ -621,8 +621,10 @@ class CaptureTab(QWidget):
         """Get the current scan location or None."""
         if self.location_combo.currentIndex() == 0:
             return None
-        if self.location_combo.currentText() in (NO_LOCATION_TEXT, INTERSTELLAR_TEXT):
+        if self.location_combo.currentText() == NO_LOCATION_TEXT:
             return None
+        if self.location_combo.currentText() == INTERSTELLAR_TEXT:
+            return "INTERSTELLAR"
         return self.scan_location
 
     def _show_no_location_warning(self):

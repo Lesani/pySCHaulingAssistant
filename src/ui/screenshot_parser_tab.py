@@ -883,8 +883,11 @@ class ScreenshotParserTab(QWidget):
 
         if index == 0:  # "-- Select Location --"
             self._scan_location = None
-        elif selected_text in (NO_LOCATION_TEXT, INTERSTELLAR_TEXT):
+        elif selected_text == NO_LOCATION_TEXT:
             self._scan_location = None
+        elif selected_text == INTERSTELLAR_TEXT:
+            self._scan_location = "INTERSTELLAR"
+            logger.info("Scan location set to: INTERSTELLAR")
         else:
             self._scan_location = selected_text
             logger.info(f"Scan location set to: {selected_text}")
@@ -893,8 +896,10 @@ class ScreenshotParserTab(QWidget):
         """Get the current scan location or None."""
         if self.location_combo.currentIndex() == 0:
             return None
-        if self.location_combo.currentText() in (NO_LOCATION_TEXT, INTERSTELLAR_TEXT):
+        if self.location_combo.currentText() == NO_LOCATION_TEXT:
             return None
+        if self.location_combo.currentText() == INTERSTELLAR_TEXT:
+            return "INTERSTELLAR"
         return self._scan_location
 
     def _parse_selection(self):

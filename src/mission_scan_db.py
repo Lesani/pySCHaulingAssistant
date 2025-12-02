@@ -117,6 +117,58 @@ class MissionScanDB:
                 return True
         return False
 
+    def update_scan_location(self, scan_id: str, new_location: str) -> bool:
+        """
+        Update the location of a scan.
+
+        Args:
+            scan_id: UUID of the scan
+            new_location: New location value
+
+        Returns:
+            True if updated, False if not found
+        """
+        for scan in self.scans:
+            if scan["id"] == scan_id:
+                scan["scan_location"] = new_location
+                scan["synced"] = False  # Mark as unsynced so it gets re-uploaded
+                self.save()
+                logger.info(f"Updated scan {scan_id[:8]} location to: {new_location}")
+                return True
+        return False
+
+    def mark_scan_synced(self, scan_id: str) -> bool:
+        """
+        Mark a scan as synced.
+
+        Args:
+            scan_id: UUID of the scan
+
+        Returns:
+            True if updated, False if not found
+        """
+        for scan in self.scans:
+            if scan["id"] == scan_id:
+                scan["synced"] = True
+                self.save()
+                return True
+        return False
+
+    def is_scan_synced(self, scan_id: str) -> bool:
+        """
+        Check if a scan has been synced.
+
+        Args:
+            scan_id: UUID of the scan
+
+        Returns:
+            True if synced, False if not synced or not found
+        """
+        for scan in self.scans:
+            if scan["id"] == scan_id:
+                return scan.get("synced", False)
+        return False
+
     def get_locations_with_scans(self) -> List[str]:
         """
         Get list of all locations that have scans.

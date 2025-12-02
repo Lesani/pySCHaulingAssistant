@@ -8,23 +8,27 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QMessageBox, QComboBox, QAbstractItemView, QProgressDialog,
-    QApplication
+    QApplication, QDialog, QDialogButtonBox, QCompleter, QLineEdit
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QBrush
 
 from datetime import datetime
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, List
 
 from src.mission_scan_db import MissionScanDB
 from src.sync_service import SyncService
 from src.config import Config
 from src.logger import get_logger
+from src.location_autocomplete import LocationMatcher
 
 if TYPE_CHECKING:
     from src.discord_auth import DiscordAuth
 
 logger = get_logger()
+
+# Color for unsynced scans (light blue)
+UNSYNCED_BG_COLOR = QColor(173, 216, 230, 80)  # Light blue with transparency
 
 
 class ScanDatabaseTab(QWidget):
@@ -32,13 +36,15 @@ class ScanDatabaseTab(QWidget):
 
     login_requested = pyqtSignal()  # Emitted when login is needed for sync
 
-    def __init__(self, scan_db: MissionScanDB, config: Config = None, discord_auth: Optional["DiscordAuth"] = None):
+    def __init__(self, scan_db: MissionScanDB, config: Config = None, discord_auth: Optional["DiscordAuth"] = None,
+                 location_matcher: Optional[LocationMatcher] = None):
         super().__init__()
 
         self.scan_db = scan_db
         self.config = config
         self.discord_auth = discord_auth
         self.sync_service = SyncService(config, discord_auth) if config else None
+        self.location_matcher = location_matcher or LocationMatcher()
 
         self._setup_ui()
         self._load_initial_data()
@@ -63,6 +69,15 @@ class ScanDatabaseTab(QWidget):
         controls_layout.addWidget(self.location_filter)
 
         controls_layout.addStretch()
+
+        # Set Location button
+        self.set_location_btn = QPushButton("Set Location")
+        self.set_location_btn.setToolTip("Set location for scans without a location")
+        self.set_location_btn.clicked.connect(self._set_location)
+        self.set_location_btn.setEnabled(False)
+        controls_layout.addWidget(self.set_location_btn)
+
+        controls_layout.addSpacing(10)
 
         # Sync button
         self.sync_btn = QPushButton("Sync")
@@ -100,7 +115,9 @@ class ScanDatabaseTab(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(True)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)  # Disable default editing
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
+        self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
 
         # Column widths
         header = self.table.horizontalHeader()
@@ -113,10 +130,11 @@ class ScanDatabaseTab(QWidget):
         header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)           # Objectives
         header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # ID
 
-        layout.addWidget(self.table)
+        layout.addWidget(self.table, 1)  # Give table stretch priority
 
-        # Details group
+        # Details group with fixed height
         details_group = QGroupBox("Selected Scan Details")
+        details_group.setFixedHeight(150)
         details_layout = QVBoxLayout()
 
         self.details_label = QLabel("Select a scan to view details")
@@ -124,7 +142,7 @@ class ScanDatabaseTab(QWidget):
         details_layout.addWidget(self.details_label)
 
         details_group.setLayout(details_layout)
-        layout.addWidget(details_group)
+        layout.addWidget(details_group, 0)  # No stretch
 
     def _load_initial_data(self):
         """Load initial data from database on startup."""
@@ -188,6 +206,10 @@ class ScanDatabaseTab(QWidget):
             row = self.table.rowCount()
             self.table.insertRow(row)
 
+        # Check if scan is unsynced (for highlighting)
+        is_unsynced = not scan.get("synced", False)
+        unsynced_brush = QBrush(UNSYNCED_BG_COLOR) if is_unsynced else None
+
         # Scan time
         scan_time = scan.get("scan_timestamp", "")
         try:
@@ -197,6 +219,10 @@ class ScanDatabaseTab(QWidget):
             time_str = scan_time
         time_item = QTableWidgetItem(time_str)
         time_item.setData(Qt.ItemDataRole.UserRole, scan.get("id"))
+        # Store synced status for sorting (0 = unsynced, 1 = synced)
+        time_item.setData(Qt.ItemDataRole.UserRole + 1, 0 if is_unsynced else 1)
+        if unsynced_brush:
+            time_item.setBackground(unsynced_brush)
         self.table.setItem(row, 0, time_item)
 
         # Location
@@ -204,6 +230,8 @@ class ScanDatabaseTab(QWidget):
         loc_item = QTableWidgetItem(location)
         if not scan.get("scan_location"):
             loc_item.setForeground(QColor("#ff9800"))
+        if unsynced_brush:
+            loc_item.setBackground(unsynced_brush)
         self.table.setItem(row, 1, loc_item)
 
         # Mission data
@@ -214,6 +242,8 @@ class ScanDatabaseTab(QWidget):
         rank_item = QTableWidgetItem(rank if rank else "-")
         if not rank:
             rank_item.setForeground(QColor("#808080"))
+        if unsynced_brush:
+            rank_item.setBackground(unsynced_brush)
         self.table.setItem(row, 2, rank_item)
 
         # Contracted By
@@ -221,17 +251,24 @@ class ScanDatabaseTab(QWidget):
         contracted_item = QTableWidgetItem(contracted_by if contracted_by else "-")
         if not contracted_by:
             contracted_item.setForeground(QColor("#808080"))
+        if unsynced_brush:
+            contracted_item.setBackground(unsynced_brush)
         self.table.setItem(row, 3, contracted_item)
 
         # Reward
         reward = mission_data.get("reward", 0)
         reward_item = QTableWidgetItem(f"{reward:,.0f} aUEC")
         reward_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        if unsynced_brush:
+            reward_item.setBackground(unsynced_brush)
         self.table.setItem(row, 4, reward_item)
 
         # Availability
         avail = mission_data.get("availability", "")
-        self.table.setItem(row, 5, QTableWidgetItem(avail))
+        avail_item = QTableWidgetItem(avail)
+        if unsynced_brush:
+            avail_item.setBackground(unsynced_brush)
+        self.table.setItem(row, 5, avail_item)
 
         # Objectives summary
         objectives = mission_data.get("objectives", [])
@@ -250,12 +287,17 @@ class ScanDatabaseTab(QWidget):
                 obj_summary += f" (+{len(objectives) - 3} more)"
         else:
             obj_summary = "No objectives"
-        self.table.setItem(row, 6, QTableWidgetItem(obj_summary))
+        obj_item = QTableWidgetItem(obj_summary)
+        if unsynced_brush:
+            obj_item.setBackground(unsynced_brush)
+        self.table.setItem(row, 6, obj_item)
 
         # ID (shortened)
         scan_id = scan.get("id", "")
         id_item = QTableWidgetItem(scan_id[:8] + "...")
         id_item.setToolTip(scan_id)
+        if unsynced_brush:
+            id_item.setBackground(unsynced_brush)
         self.table.setItem(row, 7, id_item)
 
         self.table.setSortingEnabled(True)
@@ -275,13 +317,32 @@ class ScanDatabaseTab(QWidget):
         else:
             scans = self.scan_db.get_scans()
 
+        # Sort: unsynced first, then by timestamp (most recent first)
+        scans.sort(key=lambda x: (
+            x.get("synced", False),  # False (0) comes before True (1)
+            x.get("scan_timestamp", "")
+        ), reverse=False)
+        # Reverse only timestamp within each group
+        unsynced = [s for s in scans if not s.get("synced", False)]
+        synced = [s for s in scans if s.get("synced", False)]
+        unsynced.sort(key=lambda x: x.get("scan_timestamp", ""), reverse=True)
+        synced.sort(key=lambda x: x.get("scan_timestamp", ""), reverse=True)
+        scans = unsynced + synced
+
         # Update summary
         total = len(self.scan_db.scans)
         filtered = len(scans)
+        unsynced_count = len(unsynced)
         if filter_text == "All Locations":
-            self.summary_label.setText(f"Total scans: {total}")
+            if unsynced_count > 0:
+                self.summary_label.setText(f"Total scans: {total} ({unsynced_count} unsynced)")
+            else:
+                self.summary_label.setText(f"Total scans: {total}")
         else:
-            self.summary_label.setText(f"Showing {filtered} of {total} scans")
+            if unsynced_count > 0:
+                self.summary_label.setText(f"Showing {filtered} of {total} scans ({unsynced_count} unsynced)")
+            else:
+                self.summary_label.setText(f"Showing {filtered} of {total} scans")
 
         # Populate table
         self.table.setRowCount(0)
@@ -295,10 +356,30 @@ class ScanDatabaseTab(QWidget):
         """Handle filter change."""
         self._refresh_table()
 
+    def _on_cell_double_clicked(self, row: int, column: int):
+        """Handle double-click on a cell - allow editing location for scans without one."""
+        # Only handle double-click on Location column (column 1)
+        if column != 1:
+            return
+
+        # Get the scan
+        scan_id = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        scan = self.scan_db.get_scan(scan_id)
+        if not scan:
+            return
+
+        # Only allow editing if scan has no location
+        if scan.get("scan_location") is not None:
+            return
+
+        # Use the dialog-based location setter
+        self._set_location_for_scan(scan_id)
+
     def _on_selection_changed(self):
         """Handle selection change in table."""
         selected_rows = self.table.selectionModel().selectedRows()
         self.delete_btn.setEnabled(len(selected_rows) > 0)
+        self.set_location_btn.setEnabled(len(selected_rows) > 0)
 
         if len(selected_rows) == 1:
             row = selected_rows[0].row()
@@ -341,6 +422,81 @@ class ScanDatabaseTab(QWidget):
                 lines.append(f"     Cargo: {cargo}")
 
         self.details_label.setText("\n".join(lines))
+
+    def _set_location_for_scan(self, scan_id: str):
+        """Set location for a single scan using dialog."""
+        self._show_location_dialog([scan_id])
+
+    def _set_location(self):
+        """Set location for selected scans."""
+        selected_rows = self.table.selectionModel().selectedRows()
+        if not selected_rows:
+            return
+
+        # Get IDs of all selected scans
+        scan_ids = []
+        for index in selected_rows:
+            row = index.row()
+            scan_id = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+            scan_ids.append(scan_id)
+
+        if not scan_ids:
+            return
+
+        self._show_location_dialog(scan_ids)
+
+    def _show_location_dialog(self, scan_ids: List[str]):
+        """Show dialog to set location for given scan IDs."""
+        if not scan_ids:
+            return
+
+        # Get available locations
+        locations = ["INTERSTELLAR"] + self.location_matcher.get_scannable_locations()
+
+        # Create dialog with line edit and autocomplete
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Set Location")
+        dialog.setMinimumWidth(350)
+
+        layout = QVBoxLayout(dialog)
+
+        label = QLabel(f"Set location for {len(scan_ids)} scan(s):")
+        layout.addWidget(label)
+
+        location_edit = QLineEdit()
+        location_edit.setPlaceholderText("Type to search locations...")
+
+        # Add completer for autocomplete
+        completer = QCompleter(locations)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        completer.setMaxVisibleItems(15)
+        location_edit.setCompleter(completer)
+
+        layout.addWidget(location_edit)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            new_location = location_edit.text().strip()
+            if not new_location:
+                QMessageBox.warning(self, "No Location", "Please enter a location.")
+                return
+
+            # Update all selected scans
+            updated = 0
+            for scan_id in scan_ids:
+                if self.scan_db.update_scan_location(scan_id, new_location):
+                    updated += 1
+
+            if updated > 0:
+                logger.info(f"Updated location for {updated} scan(s) to: {new_location}")
+                self._load_initial_data()
 
     def _delete_selected(self):
         """Delete selected scans."""
@@ -464,25 +620,30 @@ class ScanDatabaseTab(QWidget):
             duplicates = result.get("duplicates", 0)
             downloaded = result.get("downloaded", [])
 
+            # Mark all local scans as synced (they were either uploaded or already on server)
+            for scan in self.scan_db.scans:
+                if not scan.get("synced", False):
+                    scan["synced"] = True
+
             # Import downloaded scans
             imported = 0
             for scan in downloaded:
                 # Check if we already have this scan
                 if not self.scan_db.get_scan(scan["id"]):
-                    # Add to local database
+                    # Add to local database (already synced since it came from server)
                     self.scan_db.scans.append({
                         "id": scan["id"],
                         "scan_timestamp": scan.get("scan_timestamp"),
                         "scan_location": scan.get("scan_location"),
                         "mission_data": scan.get("mission_data", {}),
-                        "synced_from": scan.get("uploaded_by", "unknown")
+                        "synced_from": scan.get("uploaded_by", "unknown"),
+                        "synced": True
                     })
                     imported += 1
 
-            # Save if we imported anything
-            if imported > 0:
-                self.scan_db._save()
-                self._load_initial_data()
+            # Save changes (synced flags and imported scans)
+            self.scan_db.save()
+            self._load_initial_data()
 
             # Show summary
             username = self.sync_service.get_username() or "Unknown"
