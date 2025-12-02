@@ -17,6 +17,7 @@ from PyQt6.QtGui import QFont
 
 from src.config import Config
 from src.ship_profiles import SHIP_PROFILES, ShipProfile
+from src.ui.styles import get_stylesheet
 from src.logger import get_logger
 
 logger = get_logger()
@@ -46,6 +47,9 @@ class WelcomeDialog(QDialog):
         self.setWindowTitle("SC Hauling Assistant")
         self.setMinimumWidth(450)
         self.setModal(True)
+
+        # Apply app stylesheet to dialog
+        self.setStyleSheet(get_stylesheet())
 
         layout = QVBoxLayout(self)
         layout.setSpacing(20)
