@@ -5,6 +5,8 @@ Allows users to select their ship and choose whether to continue
 their previous session or start fresh.
 """
 
+from typing import List, Dict, Any
+
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QRadioButton, QButtonGroup, QPushButton, QGroupBox,
@@ -27,10 +29,11 @@ class WelcomeDialog(QDialog):
     Allows selecting ship and choosing to continue or start fresh.
     """
 
-    def __init__(self, config: Config, has_active_missions: bool, parent=None):
+    def __init__(self, config: Config, active_missions: List[Dict[str, Any]], parent=None):
         super().__init__(parent)
         self.config = config
-        self.has_active_missions = has_active_missions
+        self.active_missions = active_missions
+        self.has_active_missions = len(active_missions) > 0
 
         self.selected_ship_key: str = ""
         self.start_fresh: bool = False
@@ -111,12 +114,14 @@ class WelcomeDialog(QDialog):
         self.session_button_group.addButton(self.continue_radio, 0)
         layout.addWidget(self.continue_radio)
 
-        # Continue description
+        # Continue description with session summary
         if self.has_active_missions:
-            continue_desc = QLabel("Resume with your existing missions and route")
+            summary = self._get_session_summary()
+            continue_desc = QLabel(f"Resume with your existing missions and route\n{summary}")
         else:
             continue_desc = QLabel("No active missions found")
         continue_desc.setStyleSheet("color: #888; font-size: 11px; margin-left: 26px; margin-bottom: 8px;")
+        continue_desc.setWordWrap(True)
         layout.addWidget(continue_desc)
 
         # Fresh start option
@@ -187,6 +192,45 @@ class WelcomeDialog(QDialog):
             if not ship.can_land_on_stations:
                 info_text += " | Requires station docking"
             self.ship_info_label.setText(info_text)
+
+    def _get_session_summary(self) -> str:
+        """Calculate summary of remaining work from active missions."""
+        if not self.active_missions:
+            return ""
+
+        total_missions = len(self.active_missions)
+        total_scu = 0
+        total_stops = 0
+        completed_pickups = 0
+        completed_deliveries = 0
+
+        for mission in self.active_missions:
+            objectives = mission.get("objectives", [])
+            for obj in objectives:
+                scu = obj.get("scu_amount", 0)
+                total_scu += scu
+
+                # Count stops (pickup + delivery = 2 stops per objective)
+                pickup_done = obj.get("pickup_completed", False)
+                delivery_done = obj.get("delivery_completed", False)
+
+                if not pickup_done:
+                    total_stops += 1
+                else:
+                    completed_pickups += 1
+
+                if not delivery_done:
+                    total_stops += 1
+                else:
+                    completed_deliveries += 1
+
+        # Build summary string
+        parts = []
+        parts.append(f"{total_missions} mission{'s' if total_missions != 1 else ''}")
+        parts.append(f"{total_stops} remaining stop{'s' if total_stops != 1 else ''}")
+        parts.append(f"{total_scu:,} SCU total")
+
+        return " | ".join(parts)
 
     def _on_start(self):
         """Handle start button click."""

@@ -323,11 +323,10 @@ class MainWindow(QMainWindow):
 
     def _show_welcome_dialog(self):
         """Show the welcome dialog on startup."""
-        # Check if there are active missions
+        # Get active missions for summary display
         active_missions = self.mission_manager.get_missions(status="active")
-        has_active_missions = len(active_missions) > 0
 
-        dialog = WelcomeDialog(self.config, has_active_missions, self)
+        dialog = WelcomeDialog(self.config, active_missions, self)
         result = dialog.exec()
 
         if result == WelcomeDialog.DialogCode.Accepted:
