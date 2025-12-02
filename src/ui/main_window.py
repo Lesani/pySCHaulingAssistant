@@ -259,6 +259,9 @@ class MainWindow(QMainWindow):
         self.capture_tab.api_client = self.api_client
         self.screenshot_parser_tab.api_client = self.api_client
 
+        # Reload route planner config (ship, algorithm, etc.)
+        self.route_planner_tab.reload_config()
+
         # Reload global hotkeys
         self.hotkey_manager.stop()
         self._setup_global_hotkeys()

@@ -153,6 +153,57 @@ class ConfigTab(QWidget):
         capture_group.setLayout(capture_layout)
         content_layout.addWidget(capture_group)
 
+        # Route Planner Settings Group
+        route_group = QGroupBox("Route Planner Settings")
+        route_layout = QFormLayout()
+
+        # Ship selection
+        self.ship_combo = QComboBox()
+        self.ship_combo.setMinimumWidth(200)
+
+        # Load ship profiles if available
+        try:
+            from src.ship_profiles import ShipManager
+            self.ship_manager = ShipManager()
+            ship_names = list(self.ship_manager.profiles.keys())
+            self.ship_combo.addItems(ship_names)
+            self.has_ship_profiles = True
+        except ImportError:
+            self.ship_manager = None
+            self.ship_combo.addItem("Default (96 SCU)")
+            self.has_ship_profiles = False
+
+        # Capacity display label
+        self.ship_capacity_label = QLabel()
+        self.ship_capacity_label.setProperty("class", "muted")
+
+        ship_layout = QHBoxLayout()
+        ship_layout.addWidget(self.ship_combo)
+        ship_layout.addWidget(self.ship_capacity_label)
+        ship_layout.addStretch()
+
+        self.ship_combo.currentTextChanged.connect(self._on_ship_changed)
+        route_layout.addRow("Ship:", ship_layout)
+
+        # Optimization level
+        self.optimization_combo = QComboBox()
+        self.optimization_combo.addItems(["Basic", "Medium", "Advanced"])
+        self.optimization_combo.setMinimumWidth(150)
+        route_layout.addRow("Optimization Level:", self.optimization_combo)
+
+        # Algorithm selection
+        self.algorithm_combo = QComboBox()
+        self.algorithm_combo.addItems(["VRP Solver", "Dynamic (Regret-2 + ALNS)"])
+        self.algorithm_combo.setMinimumWidth(200)
+        self.algorithm_combo.setToolTip(
+            "VRP Solver: Fast heuristic\n"
+            "Dynamic: Advanced Regret-2 + ALNS (slower but may find better routes)"
+        )
+        route_layout.addRow("Algorithm:", self.algorithm_combo)
+
+        route_group.setLayout(route_layout)
+        content_layout.addWidget(route_group)
+
         # Global Hotkeys Group
         hotkeys_group = QGroupBox("Global Hotkeys (System-wide)")
         hotkeys_layout = QFormLayout()
@@ -343,6 +394,18 @@ class ConfigTab(QWidget):
         sync_url = self.config.get("sync", "api_url", default="https://your-sync-server.example.com")
         self.sync_url_edit.setText(sync_url)
 
+        # Route planner settings
+        saved_ship = self.config.get("route_planner", "selected_ship", default="ARGO_RAFT")
+        if self.has_ship_profiles and saved_ship in [self.ship_combo.itemText(i) for i in range(self.ship_combo.count())]:
+            self.ship_combo.setCurrentText(saved_ship)
+        self._update_ship_capacity()
+
+        optimization_level = self.config.get("route_planner", "optimization_level", default="medium")
+        self.optimization_combo.setCurrentText(optimization_level.capitalize())
+
+        algorithm = self.config.get("route_planner", "algorithm", default="VRP Solver")
+        self.algorithm_combo.setCurrentText(algorithm)
+
         logger.debug("Configuration loaded")
 
     def _set_hotkey_combo(self, combo: QComboBox, modifiers: list):
@@ -406,6 +469,19 @@ class ConfigTab(QWidget):
         }
 
         return key_map.get(display_text, display_text.lower())
+
+    def _on_ship_changed(self, ship_name: str):
+        """Handle ship selection change."""
+        self._update_ship_capacity()
+
+    def _update_ship_capacity(self):
+        """Update the capacity label based on selected ship."""
+        ship_name = self.ship_combo.currentText()
+        if self.has_ship_profiles and self.ship_manager and ship_name in self.ship_manager.profiles:
+            capacity = self.ship_manager.profiles[ship_name].cargo_capacity_scu
+            self.ship_capacity_label.setText(f"{capacity} SCU")
+        else:
+            self.ship_capacity_label.setText("96 SCU")
 
     def _on_provider_changed(self, provider: str):
         """Handle provider selection change."""
@@ -529,6 +605,23 @@ class ConfigTab(QWidget):
                 self.config.settings["sync"] = {}
 
             self.config.settings["sync"]["api_url"] = self.sync_url_edit.text().strip() or "https://your-sync-server.example.com"
+
+            # Route planner settings
+            if "route_planner" not in self.config.settings:
+                self.config.settings["route_planner"] = {}
+
+            ship_name = self.ship_combo.currentText()
+            self.config.settings["route_planner"]["selected_ship"] = ship_name
+
+            # Save ship capacity
+            if self.has_ship_profiles and self.ship_manager and ship_name in self.ship_manager.profiles:
+                capacity = self.ship_manager.profiles[ship_name].cargo_capacity_scu
+            else:
+                capacity = 96
+            self.config.settings["route_planner"]["ship_capacity"] = capacity
+
+            self.config.settings["route_planner"]["optimization_level"] = self.optimization_combo.currentText().lower()
+            self.config.settings["route_planner"]["algorithm"] = self.algorithm_combo.currentText()
 
             # Save to file
             self.config.save()

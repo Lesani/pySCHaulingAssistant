@@ -79,46 +79,13 @@ class RoutePlannerTab(QWidget):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
 
-        # Ship selection
-        if self.has_ship_profiles:
-            toolbar.addWidget(QLabel("Ship:"))
-            self.ship_combo = QComboBox()
-            ship_names = list(self.ship_manager.profiles.keys())
-            self.ship_combo.addItems(ship_names)
+        # Ship info display (read-only, configured in Settings)
+        ship_name = self.config.get("route_planner", "selected_ship", default="ARGO_RAFT")
+        self.ship_label = QLabel(f"Ship: {ship_name} ({self.selected_ship_capacity} SCU)")
+        self.ship_label.setProperty("class", "muted")
+        toolbar.addWidget(self.ship_label)
 
-            # Set saved ship
-            saved_ship = self.config.get("route_planner", "selected_ship", default="ARGO_RAFT")
-            if saved_ship in ship_names:
-                self.ship_combo.setCurrentText(saved_ship)
-                self.selected_ship_capacity = self.ship_manager.profiles[saved_ship].cargo_capacity_scu
-
-            self.ship_combo.currentTextChanged.connect(self._on_ship_changed)
-            toolbar.addWidget(self.ship_combo)
-
-            # Capacity display
-            self.capacity_label = QLabel(f"{self.selected_ship_capacity} SCU")
-            self.capacity_label.setProperty("class", "muted")
-            toolbar.addWidget(self.capacity_label)
-
-        # Optimization level
-        toolbar.addWidget(QLabel("Opt:"))
-        self.opt_combo = QComboBox()
-        self.opt_combo.addItems(["Basic", "Medium", "Advanced"])
-        self.opt_combo.setCurrentText(self.optimization_level.capitalize())
-        self.opt_combo.currentTextChanged.connect(self._on_optimization_changed)
-        toolbar.addWidget(self.opt_combo)
-
-        # Algorithm selector
-        toolbar.addWidget(QLabel("Algorithm:"))
-        self.algorithm_combo = QComboBox()
-        self.algorithm_combo.addItems(["VRP Solver", "Dynamic (Regret-2 + ALNS)"])
-        self.algorithm_combo.setToolTip("Select routing algorithm:\n"
-                                       "VRP Solver: Fast heuristic\n"
-                                       "Dynamic: Advanced Regret-2 + ALNS")
-        saved_algorithm = self.config.get("route_planner", "algorithm", default="VRP Solver")
-        self.algorithm_combo.setCurrentText(saved_algorithm)
-        self.algorithm_combo.currentTextChanged.connect(self._on_algorithm_changed)
-        toolbar.addWidget(self.algorithm_combo)
+        toolbar.addWidget(QLabel("|"))
 
         # Status label in toolbar
         self.status_label = QLabel()
@@ -207,8 +174,8 @@ class RoutePlannerTab(QWidget):
             return
 
         try:
-            # Get selected algorithm
-            algorithm = self.algorithm_combo.currentText()
+            # Get algorithm from config
+            algorithm = self.config.get("route_planner", "algorithm", default="VRP Solver")
 
             # Generate optimized route based on selected algorithm
             if algorithm == "Dynamic (Regret-2 + ALNS)":
@@ -588,40 +555,13 @@ class RoutePlannerTab(QWidget):
             self._update_route_display()
             logger.info("Progress tracking reset")
 
-    def _on_ship_changed(self, ship_name: str):
-        """Handle ship selection change."""
-        if self.has_ship_profiles and ship_name in self.ship_manager.profiles:
-            profile = self.ship_manager.profiles[ship_name]
-            self.selected_ship_capacity = profile.cargo_capacity_scu
-            self.capacity_label.setText(f"Capacity: {self.selected_ship_capacity} SCU")
+    def reload_config(self):
+        """Reload configuration (called when config is saved in Settings tab)."""
+        self.selected_ship_capacity = self.config.get("route_planner", "ship_capacity", default=96)
+        self.optimization_level = self.config.get("route_planner", "optimization_level", default="medium")
 
-            # Save preference
-            if "route_planner" not in self.config.settings:
-                self.config.settings["route_planner"] = {}
-            self.config.settings["route_planner"]["selected_ship"] = ship_name
-            self.config.settings["route_planner"]["ship_capacity"] = self.selected_ship_capacity
-            self.config.save()
+        # Update ship display
+        ship_name = self.config.get("route_planner", "selected_ship", default="ARGO_RAFT")
+        self.ship_label.setText(f"Ship: {ship_name} ({self.selected_ship_capacity} SCU)")
 
-            logger.debug(f"Ship changed to: {ship_name} ({self.selected_ship_capacity} SCU)")
-
-    def _on_optimization_changed(self, level: str):
-        """Handle optimization level change."""
-        self.optimization_level = level.lower()
-
-        # Save preference
-        if "route_planner" not in self.config.settings:
-            self.config.settings["route_planner"] = {}
-        self.config.settings["route_planner"]["optimization_level"] = self.optimization_level
-        self.config.save()
-
-        logger.debug(f"Optimization level changed to: {self.optimization_level}")
-
-    def _on_algorithm_changed(self, algorithm: str):
-        """Handle algorithm selection change."""
-        # Save preference
-        if "route_planner" not in self.config.settings:
-            self.config.settings["route_planner"] = {}
-        self.config.settings["route_planner"]["algorithm"] = algorithm
-        self.config.save()
-
-        logger.debug(f"Algorithm changed to: {algorithm}")
+        logger.debug(f"Route planner config reloaded: {ship_name} ({self.selected_ship_capacity} SCU)")
