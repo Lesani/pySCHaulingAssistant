@@ -6,8 +6,9 @@ Uses Windows system sounds via winsound for simplicity.
 """
 
 import winsound
+import time
 from enum import Enum
-from typing import Optional
+from typing import Optional, List, Tuple
 from threading import Thread
 
 from src.logger import get_logger
@@ -17,10 +18,11 @@ logger = get_logger()
 
 class SoundType(Enum):
     """Available sound notification types."""
+    SCAN_START = "scan_start"
     SCAN_SUCCESS = "scan_success"
     SCAN_FAIL = "scan_fail"
     MISSION_ADDED = "mission_added"
-    NO_LOCATION = "no_location"
+    WARNING = "warning"
 
 
 class SoundService:
@@ -30,14 +32,21 @@ class SoundService:
     Uses Windows system sounds for compatibility without external dependencies.
     """
 
-    # Windows system sound mappings
-    # See: https://docs.python.org/3/library/winsound.html
-    SOUND_MAP = {
-        SoundType.SCAN_SUCCESS: (1000, 150),      # 1000Hz for 150ms - pleasant beep
-        SoundType.SCAN_FAIL: (400, 300),          # 400Hz for 300ms - low warning tone
-        SoundType.MISSION_ADDED: (1200, 100),     # 1200Hz for 100ms - quick high beep
-        SoundType.NO_LOCATION: (600, 200),        # 600Hz for 200ms - medium warning
+    # Sound sequences: list of (frequency, duration) tuples
+    # Scan start: single high beep
+    # Scan success: low then high (confirmation)
+    # Scan fail/warning: triple low beep
+    # Mission added: quick high beep
+    SOUND_SEQUENCES = {
+        SoundType.SCAN_START: [(1200, 100)],                    # High beep to indicate start
+        SoundType.SCAN_SUCCESS: [(600, 100), (1000, 150)],      # Low-high confirmation
+        SoundType.SCAN_FAIL: [(400, 150), (400, 150), (400, 150)],  # Triple low warning
+        SoundType.MISSION_ADDED: [(1200, 100)],                 # Quick high beep
+        SoundType.WARNING: [(400, 150), (400, 150), (400, 150)],    # Triple low warning
     }
+
+    # Pause between beeps in a sequence (ms)
+    BEEP_GAP_MS = 50
 
     def __init__(self, enabled: bool = True):
         """
@@ -71,37 +80,50 @@ class SoundService:
 
         try:
             # Play in background thread to avoid blocking UI
-            Thread(target=self._play_sound, args=(sound_type,), daemon=True).start()
+            Thread(target=self._play_sequence, args=(sound_type,), daemon=True).start()
         except Exception as e:
             logger.debug(f"Failed to play sound {sound_type.value}: {e}")
 
-    def _play_sound(self, sound_type: SoundType) -> None:
-        """Internal method to play sound (runs in thread)."""
+    def _play_sequence(self, sound_type: SoundType) -> None:
+        """Internal method to play sound sequence (runs in thread)."""
         try:
-            if sound_type in self.SOUND_MAP:
-                frequency, duration = self.SOUND_MAP[sound_type]
-                winsound.Beep(frequency, duration)
+            if sound_type in self.SOUND_SEQUENCES:
+                sequence = self.SOUND_SEQUENCES[sound_type]
+                for i, (frequency, duration) in enumerate(sequence):
+                    winsound.Beep(frequency, duration)
+                    # Add gap between beeps (except after last one)
+                    if i < len(sequence) - 1:
+                        time.sleep(self.BEEP_GAP_MS / 1000.0)
             else:
                 logger.warning(f"Unknown sound type: {sound_type}")
         except Exception as e:
             # winsound.Beep can fail on systems without PC speaker
             logger.debug(f"Sound playback failed: {e}")
 
+    def play_scan_start(self) -> None:
+        """Play scan start sound (high beep)."""
+        self.play(SoundType.SCAN_START)
+
     def play_scan_success(self) -> None:
-        """Play scan success sound."""
+        """Play scan success sound (low-high)."""
         self.play(SoundType.SCAN_SUCCESS)
 
     def play_scan_fail(self) -> None:
-        """Play scan failure sound."""
+        """Play scan failure sound (triple low beep)."""
         self.play(SoundType.SCAN_FAIL)
 
     def play_mission_added(self) -> None:
         """Play mission added sound."""
         self.play(SoundType.MISSION_ADDED)
 
+    def play_warning(self) -> None:
+        """Play warning sound (triple low beep)."""
+        self.play(SoundType.WARNING)
+
+    # Keep old method name for compatibility
     def play_no_location(self) -> None:
-        """Play no location warning sound."""
-        self.play(SoundType.NO_LOCATION)
+        """Play no location warning sound (triple low beep)."""
+        self.play(SoundType.WARNING)
 
 
 # Global instance for easy access

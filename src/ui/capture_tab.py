@@ -307,6 +307,9 @@ class CaptureTab(QWidget):
             return
 
         try:
+            # Play scan start sound
+            get_sound_service().play_scan_start()
+
             # Disable button during processing
             self.capture_btn.setEnabled(False)
             self.status_message.emit("Capturing...", 0)

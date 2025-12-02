@@ -14,6 +14,7 @@ import os
 from typing import Optional, TYPE_CHECKING
 
 from src.config import Config
+from src.sound_service import get_sound_service
 from src.logger import get_logger
 
 if TYPE_CHECKING:
@@ -208,6 +209,12 @@ class ConfigTab(QWidget):
         self.hotkeys_enabled_check.setChecked(True)
         hotkeys_layout.addRow(self.hotkeys_enabled_check)
 
+        # Enable sounds checkbox
+        self.sounds_enabled_check = QCheckBox("Enable sound notifications")
+        self.sounds_enabled_check.setChecked(True)
+        self.sounds_enabled_check.stateChanged.connect(self._on_sounds_toggled)
+        hotkeys_layout.addRow(self.sounds_enabled_check)
+
         # Info label
         info_label = QLabel("These shortcuts work even when the game window is focused.")
         info_label.setProperty("class", "muted")
@@ -370,6 +377,10 @@ class ConfigTab(QWidget):
         hotkeys_enabled = self.config.get("hotkeys", "enabled", default=True)
         self.hotkeys_enabled_check.setChecked(hotkeys_enabled)
 
+        # Sound settings
+        sounds_enabled = self.config.get("sounds", "enabled", default=True)
+        self.sounds_enabled_check.setChecked(sounds_enabled)
+
         # Capture hotkey
         capture_modifiers = self.config.get("hotkeys", "capture", "modifiers", default=["shift"])
         capture_key = self.config.get("hotkeys", "capture", "key", default="print_screen")
@@ -521,6 +532,11 @@ class ConfigTab(QWidget):
             self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
             self.show_key_btn.setText("Show")
 
+    def _on_sounds_toggled(self, state: int):
+        """Handle sounds checkbox toggle - update immediately."""
+        enabled = state == Qt.CheckState.Checked.value
+        get_sound_service().enabled = enabled
+
     def _save_config(self):
         """Save configuration to file."""
         try:
@@ -592,6 +608,12 @@ class ConfigTab(QWidget):
             self.config.settings["hotkeys"]["save"]["key"] = save_key
             self.config.settings["hotkeys"]["save"]["description"] = "Add mission to hauling list"
 
+            # Sound settings
+            if "sounds" not in self.config.settings:
+                self.config.settings["sounds"] = {}
+
+            self.config.settings["sounds"]["enabled"] = self.sounds_enabled_check.isChecked()
+
             # Sync settings
             if "sync" not in self.config.settings:
                 self.config.settings["sync"] = {}
@@ -658,6 +680,9 @@ class ConfigTab(QWidget):
             self.capture_key_combo.setCurrentText("Print Screen")
             self.save_modifier_combo.setCurrentText("Shift")
             self.save_key_combo.setCurrentText("Enter")
+
+            # Reset sound settings
+            self.sounds_enabled_check.setChecked(True)
 
             # Reset sync settings
             self.sync_url_edit.setText("https://your-sync-server.example.com")
