@@ -121,6 +121,9 @@ class MainWindow(QMainWindow):
         self.capture_tab.scan_added.connect(self.scan_database_tab.add_scan_to_table)
         self.screenshot_parser_tab.scan_added.connect(self.scan_database_tab.add_scan_to_table)
 
+        # Connect status message signal from capture tab
+        self.capture_tab.status_message.connect(self._on_capture_status_message)
+
         # Connect Discord auth signals
         self.config_tab.discord_login_requested.connect(self._on_discord_login_requested)
         self.config_tab.discord_logout_requested.connect(self._on_discord_logout_requested)
@@ -261,6 +264,10 @@ class MainWindow(QMainWindow):
         self._setup_global_hotkeys()
 
         logger.info("Configuration updated")
+
+    def _on_capture_status_message(self, message: str, timeout_ms: int):
+        """Handle status messages from the capture tab."""
+        self.status_bar.showMessage(message, timeout_ms)
 
     def _on_discord_login_requested(self):
         """Handle Discord login request."""

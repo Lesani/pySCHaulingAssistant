@@ -6,9 +6,9 @@ Allows users to review and correct extracted mission data before saving.
 
 from typing import Optional, List
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox,
     QLineEdit, QSpinBox, QPushButton, QCompleter, QLabel,
-    QScrollArea, QFrame
+    QScrollArea, QFrame, QProgressBar
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QIntValidator
@@ -17,7 +17,6 @@ from src.location_autocomplete import LocationMatcher
 from src.cargo_autocomplete import CargoMatcher
 from src.domain.models import Mission, Objective
 from src.services.mission_synergy_analyzer import MissionSynergyAnalyzer, SynergyMetrics
-from src.ui.route_preview_dialog import RoutePreviewDialog
 from src.logger import get_logger
 
 logger = get_logger()
@@ -105,8 +104,10 @@ class ObjectiveRow(QWidget):
         # Remove button
         self.remove_btn = QPushButton("X")
         self.remove_btn.setFixedSize(28, 28)
-        self.remove_btn.setStyleSheet("padding: 0px;")
-        self.remove_btn.setProperty("class", "danger")
+        self.remove_btn.setStyleSheet("""
+            QPushButton { background-color: #d32f2f; padding: 0px; }
+            QPushButton:hover { background-color: #f44336; }
+        """)
         self.remove_btn.setToolTip("Remove objective")
         self.remove_btn.clicked.connect(lambda: self.removed.emit(self))
         layout.addWidget(self.remove_btn)
@@ -208,9 +209,8 @@ class ValidationForm(QWidget):
 
         # Mission details group
         self.details_group = QGroupBox("Mission Details")
-        details_layout = QFormLayout()
+        details_layout = QGridLayout()
         details_layout.setSpacing(6)
-        details_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         # Hauling mission ranks (Star Citizen 4.4)
         self.HAULING_RANKS = [
@@ -223,33 +223,51 @@ class ValidationForm(QWidget):
             "Covalex Shipping", "Ling Family Hauling", "Red Wind Linehaul"
         ]
 
-        # Rank (editable with autocomplete)
-        self.rank_edit = QLineEdit()
-        self.rank_edit.setPlaceholderText("e.g., Rookie")
-        rank_completer = QCompleter(self.HAULING_RANKS)
-        rank_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        self.rank_edit.setCompleter(rank_completer)
-        details_layout.addRow("Rank:", self.rank_edit)
+        # Row 0: Contracted By | Rank
+        contracted_label = QLabel("Contracted By:")
+        contracted_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        details_layout.addWidget(contracted_label, 0, 0)
 
-        # Contracted By (editable with autocomplete)
         self.contracted_by_edit = QLineEdit()
         self.contracted_by_edit.setPlaceholderText("e.g., Covalex Shipping")
         contractor_completer = QCompleter(self.HAULING_CONTRACTORS)
         contractor_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         contractor_completer.setFilterMode(Qt.MatchFlag.MatchContains)
         self.contracted_by_edit.setCompleter(contractor_completer)
-        details_layout.addRow("Contracted By:", self.contracted_by_edit)
+        details_layout.addWidget(self.contracted_by_edit, 0, 1)
 
-        # Reward
+        rank_label = QLabel("Rank:")
+        rank_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        details_layout.addWidget(rank_label, 0, 2)
+
+        self.rank_edit = QLineEdit()
+        self.rank_edit.setPlaceholderText("e.g., Rookie")
+        rank_completer = QCompleter(self.HAULING_RANKS)
+        rank_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.rank_edit.setCompleter(rank_completer)
+        details_layout.addWidget(self.rank_edit, 0, 3)
+
+        # Row 1: Reward | Time Left
+        reward_label = QLabel("Reward (aUEC):")
+        reward_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        details_layout.addWidget(reward_label, 1, 0)
+
         self.reward_edit = QLineEdit()
         self.reward_edit.setPlaceholderText("e.g., 48500")
         self.reward_edit.setValidator(QIntValidator(0, 999999999))
-        details_layout.addRow("Reward (aUEC):", self.reward_edit)
+        details_layout.addWidget(self.reward_edit, 1, 1)
 
-        # Availability
+        time_label = QLabel("Time Left:")
+        time_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        details_layout.addWidget(time_label, 1, 2)
+
         self.availability_edit = QLineEdit()
         self.availability_edit.setPlaceholderText("HH:MM:SS")
-        details_layout.addRow("Time Left:", self.availability_edit)
+        details_layout.addWidget(self.availability_edit, 1, 3)
+
+        # Set column stretch so fields expand evenly
+        details_layout.setColumnStretch(1, 1)
+        details_layout.setColumnStretch(3, 1)
 
         self.details_group.setLayout(details_layout)
         layout.addWidget(self.details_group)
@@ -289,34 +307,47 @@ class ValidationForm(QWidget):
 
         # Synergy analysis section
         if self.synergy_config.get('enabled', True):
-            synergy_group = QGroupBox("Mission Synergy Analysis")
+            synergy_group = QGroupBox("Mission Synergy")
             synergy_layout = QVBoxLayout()
+            synergy_layout.setSpacing(6)
 
-            # Summary label
-            self.synergy_summary_label = QLabel("Analyzing synergy with active missions...")
-            self.synergy_summary_label.setWordWrap(True)
-            synergy_layout.addWidget(self.synergy_summary_label)
+            # Stats row
+            self.synergy_stats_label = QLabel("Waiting for mission data...")
+            self.synergy_stats_label.setWordWrap(True)
+            synergy_layout.addWidget(self.synergy_stats_label)
 
-            # Warnings label
-            self.synergy_warnings_label = QLabel()
-            self.synergy_warnings_label.setWordWrap(True)
-            self.synergy_warnings_label.setStyleSheet("color: #ff6b6b; font-weight: bold;")
-            self.synergy_warnings_label.hide()
-            synergy_layout.addWidget(self.synergy_warnings_label)
+            # Synergy progress bar
+            bar_layout = QHBoxLayout()
+            bar_layout.setSpacing(8)
 
-            # Recommendation label
-            self.synergy_recommendation_label = QLabel()
-            self.synergy_recommendation_label.setWordWrap(True)
-            self.synergy_recommendation_label.hide()
-            synergy_layout.addWidget(self.synergy_recommendation_label)
+            self.synergy_bar = QProgressBar()
+            self.synergy_bar.setRange(0, 100)
+            self.synergy_bar.setValue(0)
+            self.synergy_bar.setTextVisible(True)
+            self.synergy_bar.setFormat("%p%")
+            self.synergy_bar.setMinimumHeight(24)
+            self.synergy_bar.setStyleSheet("""
+                QProgressBar {
+                    border: 1px solid #404040;
+                    border-radius: 4px;
+                    background-color: #2d2d2d;
+                    text-align: center;
+                    color: #ffffff;
+                    font-weight: bold;
+                }
+                QProgressBar::chunk {
+                    border-radius: 3px;
+                    background-color: #4caf50;
+                }
+            """)
+            bar_layout.addWidget(self.synergy_bar)
 
-            # Route preview button
-            if self.synergy_config.get('show_route_preview', True):
-                self.route_preview_btn = QPushButton("Show Route Preview")
-                self.route_preview_btn.setProperty("class", "secondary")
-                self.route_preview_btn.clicked.connect(self._show_route_preview)
-                self.route_preview_btn.setEnabled(False)
-                synergy_layout.addWidget(self.route_preview_btn)
+            synergy_layout.addLayout(bar_layout)
+
+            # Verdict label
+            self.synergy_verdict_label = QLabel()
+            self.synergy_verdict_label.setWordWrap(True)
+            synergy_layout.addWidget(self.synergy_verdict_label)
 
             synergy_group.setLayout(synergy_layout)
             layout.addWidget(synergy_group)
@@ -484,16 +515,15 @@ class ValidationForm(QWidget):
                 active_missions = self.get_active_missions_callback()
             except Exception as e:
                 logger.error(f"Error getting active missions: {e}")
-                self.synergy_summary_label.setText("Unable to analyze synergy - error getting active missions")
+                self.synergy_stats_label.setText("Unable to analyze synergy")
                 return
 
         # If no active missions, show neutral message
         if not active_missions:
-            self.synergy_summary_label.setText("No active missions to compare with. This will be your first mission!")
-            self.synergy_warnings_label.hide()
-            self.synergy_recommendation_label.hide()
-            if hasattr(self, 'route_preview_btn'):
-                self.route_preview_btn.setEnabled(False)
+            self.synergy_stats_label.setText("First mission - no comparison needed")
+            self.synergy_bar.setValue(100)
+            self._set_bar_color("green")
+            self.synergy_verdict_label.setText("")
             return
 
         # Convert mission_data to Mission object
@@ -518,15 +548,13 @@ class ValidationForm(QWidget):
             )
         except Exception as e:
             logger.error(f"Error creating candidate mission: {e}")
-            self.synergy_summary_label.setText("Unable to analyze synergy - invalid mission data")
+            self.synergy_stats_label.setText("Unable to analyze - invalid data")
             return
 
         # Create analyzer
         analyzer = MissionSynergyAnalyzer(
             ship_capacity=self.synergy_config.get('ship_capacity', 128.0),
-            capacity_threshold_pct=self.synergy_config.get('capacity_warning_threshold', 80.0),
-            low_synergy_threshold=self.synergy_config.get('low_synergy_threshold', 30.0),
-            check_timing=self.synergy_config.get('check_timing', True)
+            capacity_threshold_pct=self.synergy_config.get('capacity_warning_threshold', 80.0)
         )
 
         # Analyze
@@ -537,95 +565,68 @@ class ValidationForm(QWidget):
             # Update display
             self._update_synergy_display(metrics)
 
-            # Enable route preview button
-            if hasattr(self, 'route_preview_btn'):
-                self.route_preview_btn.setEnabled(True)
-
         except Exception as e:
             logger.error(f"Error analyzing synergy: {e}")
-            self.synergy_summary_label.setText(f"Error analyzing synergy: {str(e)}")
+            self.synergy_stats_label.setText(f"Error: {str(e)}")
 
     def _update_synergy_display(self, metrics: SynergyMetrics):
         """Update synergy display with metrics."""
-        # Update summary
-        self.synergy_summary_label.setText(metrics.inline_summary)
+        # Build stats text
+        stats_parts = []
 
-        # Build warnings
-        warnings = []
-        if metrics.exceeds_capacity:
-            warnings.append(f"⚠ EXCEEDS SHIP CAPACITY: {metrics.total_scu:.0f} SCU > {metrics.ship_capacity:.0f} SCU")
-        elif metrics.exceeds_threshold:
-            warnings.append(f"⚠ High capacity usage: {metrics.capacity_utilization_pct:.0f}% (threshold: {self.synergy_config.get('capacity_warning_threshold', 80)}%)")
+        # Stop breakdown
+        if metrics.shared_stops > 0:
+            stats_parts.append(f"Shared: {metrics.shared_stops}")
+        if metrics.nearby_stops > 0:
+            stats_parts.append(f"Nearby: {metrics.nearby_stops}")
+        if metrics.new_stops > 0:
+            stats_parts.append(f"New: {metrics.new_stops}")
 
-        if metrics.timing_warning:
-            warnings.append(f"⏰ {metrics.timing_warning}")
+        # Capacity info
+        capacity_pct = (metrics.total_scu / metrics.ship_capacity * 100) if metrics.ship_capacity > 0 else 0
+        stats_parts.append(f"Capacity: {metrics.total_scu:.0f}/{metrics.ship_capacity:.0f} SCU ({capacity_pct:.0f}%)")
 
-        if metrics.low_synergy and self.synergy_config.get('show_recommendations', True):
-            warnings.append(f"ℹ Low synergy score: {metrics.synergy_score:.0f}%")
+        self.synergy_stats_label.setText(" | ".join(stats_parts))
 
-        if warnings:
-            self.synergy_warnings_label.setText("\n".join(warnings))
-            self.synergy_warnings_label.show()
-        else:
-            self.synergy_warnings_label.hide()
+        # Update progress bar
+        score = int(metrics.synergy_score)
+        self.synergy_bar.setValue(score)
+        self._set_bar_color(metrics.verdict_color)
 
-        # Update recommendation
-        if self.synergy_config.get('show_recommendations', True):
-            if metrics.recommendation == "accept":
-                rec_text = f"✓ {metrics.recommendation_reason}"
-                rec_color = "#51cf66"  # Green
-            else:
-                rec_text = f"⚠ {metrics.recommendation_reason}"
-                rec_color = "#ffd43b"  # Yellow
+        # Update verdict
+        self.synergy_verdict_label.setText(metrics.verdict)
+        color_map = {
+            "green": "#4caf50",
+            "yellow": "#ffeb3b",
+            "orange": "#ff9800",
+            "red": "#d32f2f"
+        }
+        verdict_color = color_map.get(metrics.verdict_color, "#e0e0e0")
+        self.synergy_verdict_label.setStyleSheet(f"color: {verdict_color}; font-weight: bold;")
 
-            self.synergy_recommendation_label.setText(rec_text)
-            self.synergy_recommendation_label.setStyleSheet(f"color: {rec_color}; font-weight: bold;")
-            self.synergy_recommendation_label.show()
-        else:
-            self.synergy_recommendation_label.hide()
-
-    def _show_route_preview(self):
-        """Show route preview dialog."""
-        if not self.current_mission_data or not self.get_active_missions_callback:
-            return
-
-        try:
-            # Get active missions
-            active_missions = self.get_active_missions_callback()
-
-            # Create candidate mission
-            objectives = [
-                Objective(
-                    collect_from=obj.get('collect_from', ''),
-                    deliver_to=obj.get('deliver_to', ''),
-                    scu_amount=obj.get('scu_amount', 0),
-                    cargo_type=obj.get('cargo_type', 'Unknown')
-                )
-                for obj in self.current_mission_data.get('objectives', [])
-            ]
-
-            candidate_mission = Mission(
-                id='candidate',
-                reward=float(self.current_mission_data.get('reward', 0)),
-                availability=self.current_mission_data.get('availability', '00:00:00'),
-                objectives=objectives,
-                timestamp='',
-                status='active'
-            )
-
-            # Show dialog
-            dialog = RoutePreviewDialog(
-                candidate_mission=candidate_mission,
-                active_missions=active_missions,
-                ship_capacity=self.synergy_config.get('ship_capacity', 128.0),
-                parent=self
-            )
-            dialog.exec()
-
-        except Exception as e:
-            logger.error(f"Error showing route preview: {e}")
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Route Preview Error", f"Could not generate route preview: {str(e)}")
+    def _set_bar_color(self, color: str):
+        """Set the synergy bar color."""
+        color_map = {
+            "green": "#4caf50",
+            "yellow": "#ffeb3b",
+            "orange": "#ff9800",
+            "red": "#d32f2f"
+        }
+        bar_color = color_map.get(color, "#4caf50")
+        self.synergy_bar.setStyleSheet(f"""
+            QProgressBar {{
+                border: 1px solid #404040;
+                border-radius: 4px;
+                background-color: #2d2d2d;
+                text-align: center;
+                color: #ffffff;
+                font-weight: bold;
+            }}
+            QProgressBar::chunk {{
+                border-radius: 3px;
+                background-color: {bar_color};
+            }}
+        """)
 
     def _show_error(self, message: str):
         """Show validation error."""

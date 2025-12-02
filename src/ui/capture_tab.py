@@ -37,6 +37,8 @@ class CaptureTab(QWidget):
 
     # Signal emitted when a scan is added to the database
     scan_added = pyqtSignal(dict)
+    # Signal emitted for status bar messages (message, timeout_ms)
+    status_message = pyqtSignal(str, int)
 
     def __init__(self, config: Config, api_client: APIClient,
                  location_matcher: LocationMatcher, cargo_matcher: CargoMatcher,
@@ -116,10 +118,6 @@ class CaptureTab(QWidget):
         self.capture_btn.setEnabled(False)
         self.capture_btn.clicked.connect(self._capture_and_extract)
         top_controls.addWidget(self.capture_btn)
-
-        self.status_label = QLabel("Select a region to begin")
-        self.status_label.setProperty("class", "muted")
-        top_controls.addWidget(self.status_label)
 
         main_layout.addLayout(top_controls)
 
@@ -272,7 +270,7 @@ class CaptureTab(QWidget):
         self.selection = bbox
         x1, y1, x2, y2 = bbox
 
-        self.status_label.setText(f"Region: {x2-x1}×{y2-y1} at ({x1}, {y1})")
+        self.status_message.emit(f"Region: {x2-x1}x{y2-y1} at ({x1}, {y1})", 5000)
         self.capture_btn.setEnabled(True)
 
         # Save region
@@ -295,7 +293,7 @@ class CaptureTab(QWidget):
         if self._is_location_set() and self._is_location_stale():
             if self.location_combo.currentText() != NO_LOCATION_TEXT:
                 self._update_location_warning(True)
-                self.status_label.setText("Location is stale - select new location or click 'Parse Anyway'")
+                self.status_message.emit("Location is stale - select new location or click 'Parse Anyway'", 0)
                 return
 
         self._do_capture_and_extract()
@@ -308,7 +306,7 @@ class CaptureTab(QWidget):
         try:
             # Disable button during processing
             self.capture_btn.setEnabled(False)
-            self.status_label.setText("Capturing...")
+            self.status_message.emit("Capturing...", 0)
 
             # Capture image
             self.original_image = ImageProcessor.capture_region(self.selection)
@@ -320,14 +318,14 @@ class CaptureTab(QWidget):
             self._display_image(self.adjusted_image or self.original_image)
 
             # Extract data (synchronous)
-            self.status_label.setText("Extracting mission data...")
+            self.status_message.emit("Extracting mission data...", 0)
             self._extract_mission_data()
 
         except Exception as e:
             logger.error(f"Capture failed: {e}")
             QMessageBox.critical(self, "Capture Error", f"Failed to capture:\n{str(e)}")
             self.capture_btn.setEnabled(True)
-            self.status_label.setText("Capture failed")
+            self.status_message.emit("Capture failed", 5000)
 
     def _extract_mission_data(self):
         """Extract mission data using AI."""
@@ -364,11 +362,11 @@ class CaptureTab(QWidget):
 
                 self.validation_form.load_data(mission_data)
                 loc_str = f" at {scan_location}" if scan_location else ""
-                self.status_label.setText(f"Mission data extracted{loc_str} - Review and save below")
+                self.status_message.emit(f"Mission data extracted{loc_str} - Review and save below", 5000)
                 logger.info("Mission data extracted successfully")
             else:
                 error_msg = result.get("error", "Unknown error")
-                self.status_label.setText("✗ Extraction failed")
+                self.status_message.emit("Extraction failed", 5000)
                 QMessageBox.critical(
                     self,
                     "Extraction Error",
@@ -379,7 +377,7 @@ class CaptureTab(QWidget):
         except Exception as e:
             logger.error(f"Extraction failed: {e}")
             self.capture_btn.setEnabled(True)
-            self.status_label.setText("✗ Extraction failed")
+            self.status_message.emit("Extraction failed", 5000)
             QMessageBox.critical(
                 self,
                 "Extraction Error",
@@ -492,7 +490,7 @@ class CaptureTab(QWidget):
         self.adjusted_image = None
         self.image_label.clear()
         self.image_label.setText("No image captured")
-        self.status_label.setText("Mission saved! Capture another or switch tabs.")
+        self.status_message.emit("Mission saved! Capture another or switch tabs.", 5000)
 
     def _save_region(self, bbox: tuple):
         """Save selected region to config."""
@@ -506,7 +504,7 @@ class CaptureTab(QWidget):
         if region and len(region) == 4:
             self.selection = tuple(region)
             x1, y1, x2, y2 = self.selection
-            self.status_label.setText(f"Loaded region: {x2-x1}x{y2-y1} at ({x1}, {y1})")
+            self.status_message.emit(f"Loaded region: {x2-x1}x{y2-y1} at ({x1}, {y1})", 5000)
             self.capture_btn.setEnabled(True)
             logger.info(f"Loaded saved region: {self.selection}")
 
@@ -623,4 +621,4 @@ class CaptureTab(QWidget):
         self.location_warning_label.setText("Select a location first!")
         self.location_warning_label.show()
         self.parse_anyway_btn.show()
-        self.status_label.setText("Select a location or click 'Parse Anyway' to scan without location")
+        self.status_message.emit("Select a location or click 'Parse Anyway' to scan without location", 0)
