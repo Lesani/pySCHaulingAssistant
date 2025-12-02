@@ -29,6 +29,7 @@ from src.ui.route_planner_tab import RoutePlannerTab
 from src.ui.scan_database_tab import ScanDatabaseTab
 from src.ui.screenshot_parser_tab import ScreenshotParserTab
 from src.ui.config_tab import ConfigTab
+from src.ui.welcome_dialog import WelcomeDialog
 from src.ui.styles import get_stylesheet
 
 logger = get_logger()
@@ -70,6 +71,9 @@ class MainWindow(QMainWindow):
 
         # Connect login complete signal
         self._login_complete_signal.connect(self._on_discord_login_complete)
+
+        # Show welcome dialog after window is shown
+        QTimer.singleShot(100, self._show_welcome_dialog)
 
         logger.info("Main window initialized")
 
@@ -316,6 +320,55 @@ class MainWindow(QMainWindow):
         self.config_tab.on_discord_logout_complete()
         self.status_bar.showMessage("Logged out from Discord", 3000)
         logger.info("Discord logout completed")
+
+    def _show_welcome_dialog(self):
+        """Show the welcome dialog on startup."""
+        # Check if there are active missions
+        active_missions = self.mission_manager.get_missions(status="active")
+        has_active_missions = len(active_missions) > 0
+
+        dialog = WelcomeDialog(self.config, has_active_missions, self)
+        result = dialog.exec()
+
+        if result == WelcomeDialog.DialogCode.Accepted:
+            # Apply ship selection
+            ship_key = dialog.get_ship_key()
+            ship_capacity = dialog.get_ship_capacity()
+
+            logger.info(f"Welcome dialog: Ship={ship_key}, Capacity={ship_capacity} SCU")
+
+            # Update route planner with new ship capacity
+            self.route_planner_tab.reload_config()
+
+            # Handle fresh start
+            if dialog.should_start_fresh():
+                self._start_fresh_session()
+            else:
+                self.status_bar.showMessage("Session resumed", 3000)
+
+            # Refresh route planner
+            self.route_planner_tab.refresh()
+
+    def _start_fresh_session(self):
+        """Clear all missions and start a fresh session."""
+        try:
+            # Clear all active missions
+            cleared = self.mission_manager.clear_all(status_filter="active")
+            logger.info(f"Cleared {cleared} active missions for fresh start")
+
+            # Refresh UI
+            self.hauling_tab.refresh()
+            self.route_planner_tab.refresh()
+
+            self.status_bar.showMessage(f"Fresh session started - Cleared {cleared} missions", 3000)
+
+        except Exception as e:
+            logger.error(f"Error starting fresh session: {e}")
+            QMessageBox.warning(
+                self,
+                "Warning",
+                f"Could not clear missions: {str(e)}"
+            )
 
     def _setup_global_hotkeys(self):
         """Setup global hotkeys from configuration."""
