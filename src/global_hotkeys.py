@@ -1,13 +1,12 @@
 """
-Global hotkey manager using pynput.
+Global hotkey manager using keyboard library.
 
-Provides system-wide keyboard shortcuts that work regardless of which window is focused.
+Provides system-wide keyboard shortcuts that work with fullscreen DirectX games
+like Star Citizen by using low-level Windows keyboard hooks (WH_KEYBOARD_LL).
 """
 
-from typing import Callable, Dict, List, Optional, Set
-from threading import Thread
-from pynput import keyboard
-from pynput.keyboard import Key, KeyCode
+from typing import Callable, Dict, List, Optional
+import keyboard
 
 from src.logger import get_logger
 
@@ -27,81 +26,58 @@ class HotkeyConfig:
             callback: Function to call when hotkey is pressed
             description: Human-readable description
         """
-        self.modifiers = self._normalize_modifiers(modifiers)
-        self.key = self._normalize_key(key)
+        self.modifiers = modifiers
+        self.key = key
         self.callback = callback
         self.description = description
+        self.hotkey_string = self._build_hotkey_string()
 
-    @staticmethod
-    def _normalize_modifiers(modifiers: List[str]) -> Set[Key]:
-        """Convert modifier strings to pynput Key objects."""
+    def _build_hotkey_string(self) -> str:
+        """Build hotkey string for keyboard library (e.g., 'shift+print screen')."""
+        parts = []
+
+        # Normalize modifier names for keyboard library
         modifier_map = {
-            'shift': Key.shift,
-            'ctrl': Key.ctrl,
-            'control': Key.ctrl,
-            'alt': Key.alt,
-            'cmd': Key.cmd,
-            'win': Key.cmd,
+            'ctrl': 'ctrl',
+            'control': 'ctrl',
+            'shift': 'shift',
+            'alt': 'alt',
+            'win': 'windows',
+            'cmd': 'windows',
         }
 
-        normalized = set()
-        for mod in modifiers:
+        for mod in self.modifiers:
             mod_lower = mod.lower()
-            if mod_lower in modifier_map:
-                normalized.add(modifier_map[mod_lower])
-            else:
-                logger.warning(f"Unknown modifier: {mod}")
+            parts.append(modifier_map.get(mod_lower, mod_lower))
 
-        return normalized
-
-    @staticmethod
-    def _normalize_key(key: str) -> Key | KeyCode:
-        """Convert key string to pynput Key or KeyCode object."""
-        # Special keys
-        special_keys = {
-            'print_screen': Key.print_screen,
-            'enter': Key.enter,
-            'return': Key.enter,
-            'space': Key.space,
-            'tab': Key.tab,
-            'backspace': Key.backspace,
-            'delete': Key.delete,
-            'esc': Key.esc,
-            'escape': Key.esc,
-            'up': Key.up,
-            'down': Key.down,
-            'left': Key.left,
-            'right': Key.right,
-            'home': Key.home,
-            'end': Key.end,
-            'page_up': Key.page_up,
-            'page_down': Key.page_down,
-            'f1': Key.f1, 'f2': Key.f2, 'f3': Key.f3, 'f4': Key.f4,
-            'f5': Key.f5, 'f6': Key.f6, 'f7': Key.f7, 'f8': Key.f8,
-            'f9': Key.f9, 'f10': Key.f10, 'f11': Key.f11, 'f12': Key.f12,
+        # Normalize key name for keyboard library
+        key_map = {
+            'print_screen': 'print screen',
+            'page_up': 'page up',
+            'page_down': 'page down',
+            'return': 'enter',
+            'esc': 'escape',
         }
 
-        key_lower = key.lower()
-        if key_lower in special_keys:
-            return special_keys[key_lower]
+        key_lower = self.key.lower()
+        parts.append(key_map.get(key_lower, key_lower))
 
-        # Regular character keys
-        if len(key) == 1:
-            return KeyCode.from_char(key.lower())
-
-        logger.warning(f"Unknown key: {key}, using as character")
-        return KeyCode.from_char(key[0].lower())
+        return '+'.join(parts)
 
 
 class GlobalHotkeyManager:
-    """Manages system-wide keyboard shortcuts using pynput."""
+    """
+    Manages system-wide keyboard shortcuts using the keyboard library.
+
+    Uses low-level Windows hooks (WH_KEYBOARD_LL) that work with fullscreen
+    DirectX games like Star Citizen.
+    """
 
     def __init__(self):
         """Initialize the global hotkey manager."""
         self.hotkeys: Dict[str, HotkeyConfig] = {}
-        self.listener: Optional[keyboard.Listener] = None
-        self.current_keys: Set[Key | KeyCode] = set()
         self._running = False
+        self._registered_hooks: Dict[str, Callable] = {}
 
     def register(self, name: str, modifiers: List[str], key: str,
                  callback: Callable, description: str = "") -> None:
@@ -117,13 +93,40 @@ class GlobalHotkeyManager:
         """
         hotkey = HotkeyConfig(modifiers, key, callback, description)
         self.hotkeys[name] = hotkey
-        logger.info(f"Registered global hotkey '{name}': {modifiers}+{key} - {description}")
+        logger.info(f"Registered global hotkey '{name}': {hotkey.hotkey_string} - {description}")
+
+        # If already running, register the hook immediately
+        if self._running:
+            self._register_hook(name, hotkey)
 
     def unregister(self, name: str) -> None:
         """Unregister a hotkey by name."""
         if name in self.hotkeys:
+            # Remove the hook if it exists
+            if name in self._registered_hooks:
+                try:
+                    keyboard.remove_hotkey(self._registered_hooks[name])
+                except (KeyError, ValueError):
+                    pass  # Hook might already be removed
+                del self._registered_hooks[name]
+
             del self.hotkeys[name]
             logger.info(f"Unregistered global hotkey: {name}")
+
+    def _register_hook(self, name: str, hotkey: HotkeyConfig) -> None:
+        """Register a single hotkey hook with the keyboard library."""
+        try:
+            # Use suppress=False to allow the key event to pass through to other apps
+            hook = keyboard.add_hotkey(
+                hotkey.hotkey_string,
+                hotkey.callback,
+                suppress=False,
+                trigger_on_release=False
+            )
+            self._registered_hooks[name] = hook
+            logger.debug(f"Hook registered for '{name}': {hotkey.hotkey_string}")
+        except Exception as e:
+            logger.error(f"Failed to register hotkey '{name}' ({hotkey.hotkey_string}): {e}")
 
     def start(self) -> None:
         """Start listening for global hotkeys."""
@@ -132,14 +135,12 @@ class GlobalHotkeyManager:
             return
 
         self._running = True
-        self.listener = keyboard.Listener(
-            on_press=self._on_press,
-            on_release=self._on_release
-        )
 
-        # Start listener in daemon thread
-        self.listener.start()
-        logger.info("Global hotkey listener started")
+        # Register all hotkeys
+        for name, hotkey in self.hotkeys.items():
+            self._register_hook(name, hotkey)
+
+        logger.info(f"Global hotkey listener started with {len(self.hotkeys)} hotkeys")
 
     def stop(self) -> None:
         """Stop listening for global hotkeys."""
@@ -147,72 +148,16 @@ class GlobalHotkeyManager:
             return
 
         self._running = False
-        if self.listener:
-            self.listener.stop()
-            self.listener = None
 
-        self.current_keys.clear()
+        # Remove all registered hooks
+        for name, hook in list(self._registered_hooks.items()):
+            try:
+                keyboard.remove_hotkey(hook)
+            except (KeyError, ValueError):
+                pass  # Hook might already be removed
+
+        self._registered_hooks.clear()
         logger.info("Global hotkey listener stopped")
-
-    def _normalize_key_for_comparison(self, key) -> Key | KeyCode:
-        """Normalize key for comparison, handling left/right variants."""
-        # Convert left/right variants to generic versions
-        if hasattr(key, 'name'):
-            if key in (Key.shift_l, Key.shift_r):
-                return Key.shift
-            elif key in (Key.ctrl_l, Key.ctrl_r):
-                return Key.ctrl
-            elif key in (Key.alt_l, Key.alt_r):
-                return Key.alt
-            elif key in (Key.cmd_l, Key.cmd_r):
-                return Key.cmd
-
-        # Normalize character keys to lowercase
-        if isinstance(key, KeyCode) and key.char:
-            return KeyCode.from_char(key.char.lower())
-
-        return key
-
-    def _on_press(self, key) -> None:
-        """Handle key press event."""
-        normalized_key = self._normalize_key_for_comparison(key)
-        self.current_keys.add(normalized_key)
-
-        # Check if any hotkey matches
-        self._check_hotkeys()
-
-    def _on_release(self, key) -> None:
-        """Handle key release event."""
-        normalized_key = self._normalize_key_for_comparison(key)
-        self.current_keys.discard(normalized_key)
-
-    def _check_hotkeys(self) -> None:
-        """Check if current key combination matches any registered hotkeys."""
-        for name, hotkey in self.hotkeys.items():
-            # Check if all required modifiers are pressed
-            modifiers_pressed = all(
-                any(self._normalize_key_for_comparison(k) == mod
-                    for k in self.current_keys)
-                for mod in hotkey.modifiers
-            )
-
-            # Check if the main key is pressed
-            key_pressed = any(
-                self._normalize_key_for_comparison(k) == hotkey.key
-                for k in self.current_keys
-            )
-
-            # Check if only the required keys are pressed (no extra modifiers)
-            expected_keys = hotkey.modifiers | {hotkey.key}
-            actual_keys = {self._normalize_key_for_comparison(k) for k in self.current_keys}
-
-            if modifiers_pressed and key_pressed and expected_keys == actual_keys:
-                logger.debug(f"Hotkey triggered: {name}")
-                try:
-                    # Execute callback in a separate thread to avoid blocking
-                    Thread(target=hotkey.callback, daemon=True).start()
-                except Exception as e:
-                    logger.error(f"Error executing hotkey callback '{name}': {e}")
 
     def get_hotkeys_info(self) -> List[Dict[str, str]]:
         """
@@ -223,13 +168,9 @@ class GlobalHotkeyManager:
         """
         info = []
         for name, hotkey in self.hotkeys.items():
-            # Format key combination nicely
-            modifiers_str = '+'.join(str(m).replace('Key.', '').title()
-                                    for m in sorted(hotkey.modifiers, key=str))
-            key_str = str(hotkey.key).replace('Key.', '').replace('_', ' ').title()
-            if isinstance(hotkey.key, KeyCode):
-                key_str = hotkey.key.char.upper() if hotkey.key.char else str(hotkey.key)
-
+            # Format key combination nicely for display
+            modifiers_str = '+'.join(mod.title() for mod in hotkey.modifiers)
+            key_str = hotkey.key.replace('_', ' ').title()
             keys = f"{modifiers_str}+{key_str}" if modifiers_str else key_str
 
             info.append({
