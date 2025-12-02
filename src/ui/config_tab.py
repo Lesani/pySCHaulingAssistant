@@ -273,7 +273,7 @@ class ConfigTab(QWidget):
 
         # API URL
         self.sync_url_edit = QLineEdit()
-        self.sync_url_edit.setPlaceholderText("https://your-sync-server.example.com")
+        self.sync_url_edit.setPlaceholderText("https://your-worker.workers.dev")
         self.sync_url_edit.setMinimumWidth(300)
         sync_layout.addRow("Sync API URL:", self.sync_url_edit)
 
@@ -685,7 +685,7 @@ class ConfigTab(QWidget):
             self.sounds_enabled_check.setChecked(True)
 
             # Reset sync settings
-            self.sync_url_edit.setText("https://your-sync-server.example.com")
+            self.sync_url_edit.setText("")
 
             logger.info("Settings reset to defaults")
 
