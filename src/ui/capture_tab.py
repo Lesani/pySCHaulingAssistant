@@ -69,135 +69,61 @@ class CaptureTab(QWidget):
         self._load_saved_region()
 
     def _setup_ui(self):
-        """Setup the capture tab UI."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        """Setup the capture tab UI with side-by-side layout."""
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(6)
 
-        # Location selector row
-        location_layout = QHBoxLayout()
-        location_layout.setSpacing(8)
+        # Top controls row (location + capture buttons)
+        top_controls = QHBoxLayout()
+        top_controls.setSpacing(8)
 
-        location_layout.addWidget(QLabel("Scan Location:"))
-
+        # Location selector
+        top_controls.addWidget(QLabel("Current Location:"))
         self.location_combo = QComboBox()
-        self.location_combo.setMinimumWidth(250)
+        self.location_combo.setMinimumWidth(200)
         self.location_combo.addItem("-- Select Location --")
         self.location_combo.addItem(NO_LOCATION_TEXT)
-        # Add all scannable locations
         for loc in self.location_matcher.get_scannable_locations():
             self.location_combo.addItem(loc)
         self.location_combo.currentIndexChanged.connect(self._on_location_changed)
-        location_layout.addWidget(self.location_combo)
+        top_controls.addWidget(self.location_combo)
 
         self.location_time_label = QLabel("")
         self.location_time_label.setProperty("class", "muted")
-        location_layout.addWidget(self.location_time_label)
+        top_controls.addWidget(self.location_time_label)
 
         self.location_warning_label = QLabel("")
         self.location_warning_label.setStyleSheet("color: #ff9800; font-weight: bold;")
         self.location_warning_label.hide()
-        location_layout.addWidget(self.location_warning_label)
+        top_controls.addWidget(self.location_warning_label)
 
         self.parse_anyway_btn = QPushButton("Parse Anyway")
         self.parse_anyway_btn.setProperty("class", "warning")
         self.parse_anyway_btn.setToolTip("Location is stale (>10 min). Click to capture anyway.")
         self.parse_anyway_btn.clicked.connect(self._force_capture_and_extract)
         self.parse_anyway_btn.hide()
-        location_layout.addWidget(self.parse_anyway_btn)
+        top_controls.addWidget(self.parse_anyway_btn)
 
-        location_layout.addStretch()
-        layout.addLayout(location_layout)
+        top_controls.addStretch()
 
-        # Top controls
-        controls_layout = QHBoxLayout()
-        controls_layout.setSpacing(8)
-
+        # Capture buttons
         self.select_btn = QPushButton("Select Region")
         self.select_btn.clicked.connect(self._select_region)
-        controls_layout.addWidget(self.select_btn)
+        top_controls.addWidget(self.select_btn)
 
         self.capture_btn = QPushButton("Capture & Extract")
         self.capture_btn.setEnabled(False)
         self.capture_btn.clicked.connect(self._capture_and_extract)
-        controls_layout.addWidget(self.capture_btn)
-
-        # Compact image adjustments
-        controls_layout.addWidget(QLabel("Brightness:"))
-        self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
-        self.brightness_slider.setRange(-100, 100)
-        self.brightness_slider.setValue(0)
-        self.brightness_slider.setMaximumWidth(100)
-        self.brightness_slider.valueChanged.connect(self._on_adjustment_changed)
-        controls_layout.addWidget(self.brightness_slider)
-        self.brightness_value_label = QLabel("0")
-        self.brightness_value_label.setMinimumWidth(30)
-        controls_layout.addWidget(self.brightness_value_label)
-
-        controls_layout.addWidget(QLabel("Contrast:"))
-        self.contrast_slider = QSlider(Qt.Orientation.Horizontal)
-        self.contrast_slider.setRange(-100, 100)
-        self.contrast_slider.setValue(0)
-        self.contrast_slider.setMaximumWidth(100)
-        self.contrast_slider.valueChanged.connect(self._on_adjustment_changed)
-        controls_layout.addWidget(self.contrast_slider)
-        self.contrast_value_label = QLabel("0")
-        self.contrast_value_label.setMinimumWidth(30)
-        controls_layout.addWidget(self.contrast_value_label)
-
-        controls_layout.addWidget(QLabel("Gamma:"))
-        self.gamma_slider = QSlider(Qt.Orientation.Horizontal)
-        self.gamma_slider.setRange(50, 200)
-        self.gamma_slider.setValue(100)
-        self.gamma_slider.setMaximumWidth(100)
-        self.gamma_slider.valueChanged.connect(self._on_adjustment_changed)
-        controls_layout.addWidget(self.gamma_slider)
-        self.gamma_value_label = QLabel("1.0")
-        self.gamma_value_label.setMinimumWidth(30)
-        controls_layout.addWidget(self.gamma_value_label)
-
-        reset_btn = QPushButton("🔄")
-        reset_btn.setProperty("class", "secondary")
-        reset_btn.setMaximumWidth(30)
-        reset_btn.setToolTip("Reset adjustments")
-        reset_btn.clicked.connect(self._reset_adjustments)
-        controls_layout.addWidget(reset_btn)
-
-        controls_layout.addStretch()
+        top_controls.addWidget(self.capture_btn)
 
         self.status_label = QLabel("Select a region to begin")
         self.status_label.setProperty("class", "muted")
-        controls_layout.addWidget(self.status_label)
+        top_controls.addWidget(self.status_label)
 
-        layout.addLayout(controls_layout)
+        main_layout.addLayout(top_controls)
 
-        # Image preview group
-        preview_group = QGroupBox("Image Preview")
-        preview_layout = QVBoxLayout()
-
-        self.image_label = QLabel()
-        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_label.setMinimumHeight(300)
-        self.image_label.setStyleSheet("""
-            QLabel {
-                border: 2px dashed #3d3d3d;
-                border-radius: 4px;
-                background-color: #252525;
-            }
-        """)
-        self.image_label.setText("No image captured")
-
-        # Scroll area for large images
-        scroll = QScrollArea()
-        scroll.setWidget(self.image_label)
-        scroll.setWidgetResizable(True)
-        scroll.setMinimumHeight(320)
-        preview_layout.addWidget(scroll)
-
-        preview_group.setLayout(preview_layout)
-        layout.addWidget(preview_group)
-
-        # Validation form with synergy configuration
+        # Create validation form first (we'll reparent its widgets)
         synergy_config = {
             'enabled': self.config.get_synergy_enabled(),
             'ship_capacity': self.config.get_ship_capacity(),
@@ -215,7 +141,124 @@ class CaptureTab(QWidget):
             synergy_config=synergy_config
         )
         self.validation_form.mission_saved.connect(self._on_mission_saved)
-        layout.addWidget(self.validation_form)
+        self.validation_form.hide()  # We reparent its child widgets
+
+        # === TOP SECTION: Side-by-side (Image | Details + Synergy) ===
+        top_content = QHBoxLayout()
+        top_content.setSpacing(8)
+
+        # LEFT: Image Preview
+        preview_group = QGroupBox("Image Preview")
+        preview_group.setMinimumHeight(400)
+        preview_layout = QVBoxLayout()
+        preview_layout.setContentsMargins(8, 8, 8, 8)
+
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setStyleSheet("""
+            QLabel {
+                border: 2px dashed #3d3d3d;
+                border-radius: 4px;
+                background-color: #252525;
+            }
+        """)
+        self.image_label.setText("No image captured")
+
+        scroll = QScrollArea()
+        scroll.setWidget(self.image_label)
+        scroll.setWidgetResizable(True)
+        preview_layout.addWidget(scroll)
+
+        # Image adjustment controls
+        adjust_layout = QHBoxLayout()
+        adjust_layout.setSpacing(4)
+
+        adjust_layout.addWidget(QLabel("Brightness:"))
+        self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
+        self.brightness_slider.setRange(-100, 100)
+        self.brightness_slider.setValue(0)
+        self.brightness_slider.setMaximumWidth(80)
+        self.brightness_slider.valueChanged.connect(self._on_adjustment_changed)
+        adjust_layout.addWidget(self.brightness_slider)
+        self.brightness_value_label = QLabel("0")
+        self.brightness_value_label.setMinimumWidth(25)
+        adjust_layout.addWidget(self.brightness_value_label)
+
+        adjust_layout.addWidget(QLabel("Contrast:"))
+        self.contrast_slider = QSlider(Qt.Orientation.Horizontal)
+        self.contrast_slider.setRange(-100, 100)
+        self.contrast_slider.setValue(0)
+        self.contrast_slider.setMaximumWidth(80)
+        self.contrast_slider.valueChanged.connect(self._on_adjustment_changed)
+        adjust_layout.addWidget(self.contrast_slider)
+        self.contrast_value_label = QLabel("0")
+        self.contrast_value_label.setMinimumWidth(25)
+        adjust_layout.addWidget(self.contrast_value_label)
+
+        adjust_layout.addWidget(QLabel("Gamma:"))
+        self.gamma_slider = QSlider(Qt.Orientation.Horizontal)
+        self.gamma_slider.setRange(50, 200)
+        self.gamma_slider.setValue(100)
+        self.gamma_slider.setMaximumWidth(80)
+        self.gamma_slider.valueChanged.connect(self._on_adjustment_changed)
+        adjust_layout.addWidget(self.gamma_slider)
+        self.gamma_value_label = QLabel("1.0")
+        self.gamma_value_label.setMinimumWidth(25)
+        adjust_layout.addWidget(self.gamma_value_label)
+
+        reset_btn = QPushButton("Reset")
+        reset_btn.setProperty("class", "secondary")
+        reset_btn.setToolTip("Reset adjustments")
+        reset_btn.clicked.connect(self._reset_adjustments)
+        adjust_layout.addWidget(reset_btn)
+
+        adjust_layout.addStretch()
+        preview_layout.addLayout(adjust_layout)
+
+        preview_group.setLayout(preview_layout)
+        top_content.addWidget(preview_group, 1)
+
+        # RIGHT: Mission Details + Synergy (reparent from validation form)
+        right_panel = QVBoxLayout()
+        right_panel.setSpacing(6)
+        right_panel.setContentsMargins(0, 0, 0, 0)
+
+        # Reparent details group from validation form
+        self.validation_form.details_group.setParent(None)
+        right_panel.addWidget(self.validation_form.details_group)
+
+        # Reparent synergy group if it exists
+        if hasattr(self.validation_form, 'synergy_group') and self.validation_form.synergy_group:
+            self.validation_form.synergy_group.setParent(None)
+            right_panel.addWidget(self.validation_form.synergy_group)
+
+        right_panel.addStretch()
+
+        right_widget = QWidget()
+        right_widget.setLayout(right_panel)
+        top_content.addWidget(right_widget, 1)
+
+        main_layout.addLayout(top_content, 0)  # Stretch factor 0 - fixed height
+
+        # === BOTTOM SECTION: Objectives (full width, stretches) ===
+        # Reparent objectives group from validation form
+        self.validation_form.objectives_group.setParent(None)
+        main_layout.addWidget(self.validation_form.objectives_group, 1)  # Stretch factor 1 - takes available space
+
+        # Action buttons (from validation form, keep them connected)
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        clear_btn = QPushButton("Clear")
+        clear_btn.setProperty("class", "secondary")
+        clear_btn.clicked.connect(self.validation_form.clear)
+        button_layout.addWidget(clear_btn)
+
+        save_btn = QPushButton("Add to Hauling List")
+        save_btn.clicked.connect(self.validation_form._save_mission)
+        button_layout.addWidget(save_btn)
+
+        main_layout.addLayout(button_layout)
 
     def _select_region(self):
         """Open region selector overlay."""

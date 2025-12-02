@@ -71,7 +71,7 @@ class MainWindow(QMainWindow):
     def _setup_ui(self):
         """Initialize the user interface."""
         self.setWindowTitle("SC Hauling Assistant")
-        self.setMinimumSize(1000, 700)
+        self.setMinimumSize(1000, 875)
 
         # Create central widget with tab widget
         central_widget = QWidget()

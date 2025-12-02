@@ -58,13 +58,41 @@ class ObjectiveRow(QWidget):
         layout.addWidget(QLabel("Cargo:"))
         layout.addWidget(self.cargo_edit, 1)
 
-        # SCU amount
+        # SCU amount with vertical +/- buttons
+        layout.addWidget(QLabel("SCU:"))
+
+        scu_container = QHBoxLayout()
+        scu_container.setSpacing(2)
+        scu_container.setContentsMargins(0, 0, 0, 0)
+
         self.scu_spin = QSpinBox()
         self.scu_spin.setRange(1, 9999)
         self.scu_spin.setValue(1)
-        self.scu_spin.setMinimumWidth(80)
-        layout.addWidget(QLabel("SCU:"))
-        layout.addWidget(self.scu_spin)
+        self.scu_spin.setMinimumWidth(50)
+        self.scu_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        scu_container.addWidget(self.scu_spin)
+
+        # Vertical button widget (fixed size container)
+        btn_widget = QWidget()
+        btn_widget.setFixedSize(20, 30)
+        btn_layout = QVBoxLayout(btn_widget)
+        btn_layout.setSpacing(1)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+
+        scu_up_btn = QPushButton("+")
+        scu_up_btn.setFixedSize(20, 14)
+        scu_up_btn.setStyleSheet("padding: 0px; font-size: 10px;")
+        scu_up_btn.clicked.connect(lambda: self.scu_spin.setValue(self.scu_spin.value() + 1))
+        btn_layout.addWidget(scu_up_btn)
+
+        scu_down_btn = QPushButton("-")
+        scu_down_btn.setFixedSize(20, 14)
+        scu_down_btn.setStyleSheet("padding: 0px; font-size: 10px;")
+        scu_down_btn.clicked.connect(lambda: self.scu_spin.setValue(self.scu_spin.value() - 1))
+        btn_layout.addWidget(scu_down_btn)
+
+        scu_container.addWidget(btn_widget)
+        layout.addLayout(scu_container)
 
         # Delivery location
         self.deliver_edit = QLineEdit()
@@ -75,8 +103,9 @@ class ObjectiveRow(QWidget):
         layout.addWidget(self.deliver_edit, 2)
 
         # Remove button
-        self.remove_btn = QPushButton("❌")
-        self.remove_btn.setMaximumWidth(30)
+        self.remove_btn = QPushButton("X")
+        self.remove_btn.setFixedSize(28, 28)
+        self.remove_btn.setStyleSheet("padding: 0px;")
         self.remove_btn.setProperty("class", "danger")
         self.remove_btn.setToolTip("Remove objective")
         self.remove_btn.clicked.connect(lambda: self.removed.emit(self))
@@ -175,78 +204,88 @@ class ValidationForm(QWidget):
         """Setup the validation form UI."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
 
         # Mission details group
-        details_group = QGroupBox("Mission Details")
-        details_layout = QHBoxLayout()
+        self.details_group = QGroupBox("Mission Details")
+        details_layout = QFormLayout()
+        details_layout.setSpacing(6)
+        details_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        # Rank (read-only, extracted by AI)
-        rank_layout = QFormLayout()
+        # Hauling mission ranks (Star Citizen 4.4)
+        self.HAULING_RANKS = [
+            "Trainee", "Rookie", "Junior", "Member",
+            "Experienced", "Senior", "Master"
+        ]
+
+        # Hauling contractors (Star Citizen 4.4)
+        self.HAULING_CONTRACTORS = [
+            "Covalex Shipping", "Ling Family Hauling", "Red Wind Linehaul"
+        ]
+
+        # Rank (editable with autocomplete)
         self.rank_edit = QLineEdit()
-        self.rank_edit.setPlaceholderText("(extracted)")
-        self.rank_edit.setMinimumWidth(100)
-        self.rank_edit.setReadOnly(True)
-        self.rank_edit.setStyleSheet("QLineEdit { background-color: #252525; }")
-        rank_layout.addRow("Rank:", self.rank_edit)
-        details_layout.addLayout(rank_layout)
+        self.rank_edit.setPlaceholderText("e.g., Rookie")
+        rank_completer = QCompleter(self.HAULING_RANKS)
+        rank_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.rank_edit.setCompleter(rank_completer)
+        details_layout.addRow("Rank:", self.rank_edit)
 
-        # Contracted By (read-only, extracted by AI)
-        contracted_layout = QFormLayout()
+        # Contracted By (editable with autocomplete)
         self.contracted_by_edit = QLineEdit()
-        self.contracted_by_edit.setPlaceholderText("(extracted)")
-        self.contracted_by_edit.setMinimumWidth(150)
-        self.contracted_by_edit.setReadOnly(True)
-        self.contracted_by_edit.setStyleSheet("QLineEdit { background-color: #252525; }")
-        contracted_layout.addRow("Contracted By:", self.contracted_by_edit)
-        details_layout.addLayout(contracted_layout)
+        self.contracted_by_edit.setPlaceholderText("e.g., Covalex Shipping")
+        contractor_completer = QCompleter(self.HAULING_CONTRACTORS)
+        contractor_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        contractor_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.contracted_by_edit.setCompleter(contractor_completer)
+        details_layout.addRow("Contracted By:", self.contracted_by_edit)
 
         # Reward
-        reward_layout = QFormLayout()
         self.reward_edit = QLineEdit()
         self.reward_edit.setPlaceholderText("e.g., 48500")
         self.reward_edit.setValidator(QIntValidator(0, 999999999))
-        self.reward_edit.setMinimumWidth(120)
-        reward_layout.addRow("Reward (aUEC):", self.reward_edit)
-        details_layout.addLayout(reward_layout)
+        details_layout.addRow("Reward (aUEC):", self.reward_edit)
 
         # Availability
-        avail_layout = QFormLayout()
         self.availability_edit = QLineEdit()
         self.availability_edit.setPlaceholderText("HH:MM:SS")
-        self.availability_edit.setMinimumWidth(100)
-        avail_layout.addRow("Time Left:", self.availability_edit)
-        details_layout.addLayout(avail_layout)
+        details_layout.addRow("Time Left:", self.availability_edit)
 
-        details_layout.addStretch()
-        details_group.setLayout(details_layout)
-        layout.addWidget(details_group)
+        self.details_group.setLayout(details_layout)
+        layout.addWidget(self.details_group)
 
         # Objectives group
-        objectives_group = QGroupBox("Cargo Objectives")
-        objectives_layout = QVBoxLayout()
+        self.objectives_group = QGroupBox("Cargo Objectives")
+        objectives_group_layout = QVBoxLayout()
+        objectives_group_layout.setContentsMargins(8, 8, 8, 8)
+        objectives_group_layout.setSpacing(4)
 
-        # Scrollable area for objectives
+        # Scrollable area for objectives (includes the add button row)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setMinimumHeight(150)
+        scroll.setMinimumHeight(80)
 
         scroll_widget = QWidget()
+        scroll_widget.setStyleSheet("background-color: #252525;")
         self.objectives_layout = QVBoxLayout(scroll_widget)
+        self.objectives_layout.setContentsMargins(0, 0, 0, 0)
         self.objectives_layout.setSpacing(8)
-        self.objectives_layout.addStretch()
+        self.objectives_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        # Add objective button styled like an objective row (inside scroll area)
+        self.add_obj_btn = QPushButton("+ Add Objective")
+        self.add_obj_btn.setProperty("class", "secondary")
+        self.add_obj_btn.setMinimumHeight(32)
+        self.add_obj_btn.clicked.connect(self._add_objective_row)
+        self.objectives_layout.addWidget(self.add_obj_btn)
 
         scroll.setWidget(scroll_widget)
-        objectives_layout.addWidget(scroll)
+        scroll.setAlignment(Qt.AlignmentFlag.AlignTop)
+        objectives_group_layout.addWidget(scroll)
 
-        # Add objective button
-        add_obj_btn = QPushButton("+ Add Objective")
-        add_obj_btn.setProperty("class", "secondary")
-        add_obj_btn.clicked.connect(self._add_objective_row)
-        objectives_layout.addWidget(add_obj_btn)
-
-        objectives_group.setLayout(objectives_layout)
-        layout.addWidget(objectives_group)
+        self.objectives_group.setLayout(objectives_group_layout)
+        layout.addWidget(self.objectives_group)
 
         # Synergy analysis section
         if self.synergy_config.get('enabled', True):
@@ -308,11 +347,9 @@ class ValidationForm(QWidget):
         row = ObjectiveRow(self.location_matcher, self.cargo_matcher)
         row.removed.connect(self._remove_objective_row)
 
-        # Insert before stretch
-        self.objectives_layout.insertWidget(
-            len(self.objective_rows),
-            row
-        )
+        # Insert before the "Add Objective" button (which is at the end)
+        insert_index = self.objectives_layout.count() - 1
+        self.objectives_layout.insertWidget(insert_index, row)
         self.objective_rows.append(row)
 
         logger.debug(f"Added objective row (total: {len(self.objective_rows)})")
