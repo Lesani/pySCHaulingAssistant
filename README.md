@@ -4,6 +4,8 @@ A PyQt6 desktop application for Star Citizen players to streamline hauling missi
 
 ![Welcome Screen](.images/welcome.png)
 
+> **New to Star Citizen?** Use my [referral link](https://www.robertsspaceindustries.com/enlist?referral=STAR-CD5Q-K7WK) when signing up to get **50,000 bonus UEC** to start your space adventures!
+
 ## Features
 
 ### Mission Capture & Extraction
@@ -169,3 +171,7 @@ This project is provided as-is for personal use by Star Citizen players.
 AI pair programming assistant that helped develop this application.
 
 <img src=".images/claude.png" alt="Claude Code" width="200"/>
+
+---
+
+**New to Star Citizen?** Sign up with my [referral link](https://www.robertsspaceindustries.com/enlist?referral=STAR-CD5Q-K7WK) and get **50,000 bonus UEC**!
