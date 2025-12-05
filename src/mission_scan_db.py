@@ -183,6 +183,91 @@ class MissionScanDB:
                 locations.add(loc)
         return sorted(locations)
 
+    def query_scans(
+        self,
+        min_reward: Optional[float] = None,
+        max_reward: Optional[float] = None,
+        ranks: Optional[List[str]] = None,
+        limit: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Query scans with multiple filter criteria.
+
+        Args:
+            min_reward: Minimum reward value (inclusive)
+            max_reward: Maximum reward value (inclusive)
+            ranks: List of acceptable ranks (None for all)
+            limit: Maximum number of results
+
+        Returns:
+            List of scan records matching criteria, most recent first
+        """
+        results = []
+
+        for scan in self.scans:
+            mission_data = scan.get("mission_data", {})
+
+            # Filter by reward
+            reward = mission_data.get("reward", 0)
+            if min_reward is not None and reward < min_reward:
+                continue
+            if max_reward is not None and reward > max_reward:
+                continue
+
+            # Filter by rank
+            if ranks is not None:
+                scan_rank = mission_data.get("rank")
+                if scan_rank and scan_rank not in ranks:
+                    continue
+
+            results.append(scan)
+
+        # Sort by timestamp descending
+        results.sort(key=lambda x: x.get("scan_timestamp", ""), reverse=True)
+
+        if limit is not None:
+            results = results[:limit]
+
+        return results
+
+    def get_unique_ranks(self) -> List[str]:
+        """
+        Get list of all unique ranks found in scans.
+
+        Returns:
+            List of rank names, ordered by hierarchy
+        """
+        # Define rank order
+        rank_order = [
+            "Trainee", "Rookie", "Junior", "Member",
+            "Experienced", "Senior", "Master"
+        ]
+
+        found_ranks = set()
+        for scan in self.scans:
+            mission_data = scan.get("mission_data", {})
+            rank = mission_data.get("rank")
+            if rank:
+                found_ranks.add(rank)
+
+        # Return in hierarchy order
+        return [r for r in rank_order if r in found_ranks]
+
+    def get_unique_contractors(self) -> List[str]:
+        """
+        Get list of all unique contracted_by values.
+
+        Returns:
+            List of contractor names, sorted alphabetically
+        """
+        contractors = set()
+        for scan in self.scans:
+            mission_data = scan.get("mission_data", {})
+            contractor = mission_data.get("contracted_by")
+            if contractor:
+                contractors.add(contractor)
+        return sorted(contractors)
+
     def get_summary(self) -> Dict[str, Any]:
         """
         Get summary statistics about scans.

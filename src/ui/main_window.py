@@ -27,10 +27,12 @@ from src.ui.capture_tab import CaptureTab
 from src.ui.hauling_tab import HaulingTab
 from src.ui.route_planner_tab import RoutePlannerTab
 from src.ui.scan_database_tab import ScanDatabaseTab
+from src.ui.route_finder_tab import RouteFinderTab
 from src.ui.screenshot_parser_tab import ScreenshotParserTab
 from src.ui.config_tab import ConfigTab
 from src.ui.welcome_dialog import WelcomeDialog
 from src.ui.styles import get_stylesheet
+from src.ship_profiles import ShipManager
 
 logger = get_logger()
 
@@ -117,6 +119,12 @@ class MainWindow(QMainWindow):
             self.mission_manager
         )
         self.scan_database_tab = ScanDatabaseTab(self.scan_db, self.config, self.discord_auth, self.location_matcher)
+        self.route_finder_tab = RouteFinderTab(
+            self.config,
+            self.scan_db,
+            self.location_matcher,
+            ShipManager()
+        )
         self.screenshot_parser_tab = ScreenshotParserTab(
             self.config,
             self.api_client,
@@ -143,6 +151,7 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(self.hauling_tab, "Hauling")
         self.tab_widget.addTab(self.route_planner_tab, "Route Planner")
         self.tab_widget.addTab(self.scan_database_tab, "Scan Database")
+        self.tab_widget.addTab(self.route_finder_tab, "Route Finder")
         self.tab_widget.addTab(self.screenshot_parser_tab, "Screenshot Parser")
         self.tab_widget.addTab(self.config_tab, "Configuration")
 
@@ -189,6 +198,8 @@ class MainWindow(QMainWindow):
             self.hauling_tab.refresh()
         elif index == 2:  # Route Planner tab
             self.route_planner_tab.refresh()
+        elif index == 4:  # Route Finder tab
+            self.route_finder_tab.refresh()
 
     def _get_active_missions(self):
         """Get list of active missions for synergy analysis."""

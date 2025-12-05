@@ -6,11 +6,14 @@
     "Stations": [
       "Stanton Gateway",
       "Pyro Gateway"
-    ]
+    ],
+    "Lagrange Stations": [],
+    "Distribution Centers": []
   },
   "dropoffpoints": {
     "Delamar": {
       "City": ["Levski"]
     }
-  }
+  },
+  "moons": {}
 }

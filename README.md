@@ -26,6 +26,14 @@ A PyQt6 desktop application for Star Citizen players to streamline hauling missi
 - **Pickup-Delivery Constraints**: Ensures cargo is picked up before delivery
 - **Capacity Management**: Routes respect your ship's cargo limits
 
+### Route Finder (New)
+- **Database Search**: Find optimal routes from the shared mission scan database
+- **Location Type Filters**: Filter by orbital stations, distribution centers, cities, outposts, and more
+- **System Selection**: Search within Stanton, Pyro, or Nyx systems
+- **Mission Filters**: Filter by rank requirements and reward ranges
+- **Multiple Optimization Goals**: Maximize reward, minimize stops, minimize distance, or optimize reward per stop/SCU
+- **Ship-Aware**: Automatically filters missions that fit your ship's cargo capacity
+
 ### Cloud Sync (Optional)
 - **Scan Database**: Store historical mission scans in the cloud
 - **Discord Authentication**: Secure sync via Discord OAuth

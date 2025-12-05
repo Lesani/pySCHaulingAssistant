@@ -64,9 +64,15 @@ class LocationHierarchy:
         self.nyx_planets = ["Delamar"]  # Asteroid treated as planet
         self.nyx_moons = {}
 
+        # Known celestial bodies - Pyro system
+        self.pyro_planets = ["Pyro 1", "Monox", "Bloom", "Pyro IV", "Pyro V", "Terminus"]
+        self.pyro_moons = {
+            "Pyro V": ["Ignis", "Vatra", "Adir", "Fairo", "Fuego", "Vuur"]
+        }
+
         # All planets combined
-        self.all_planets = self.stanton_planets + self.nyx_planets
-        self.all_moons = {**self.stanton_moons, **self.nyx_moons}
+        self.all_planets = self.stanton_planets + self.nyx_planets + self.pyro_planets
+        self.all_moons = {**self.stanton_moons, **self.nyx_moons, **self.pyro_moons}
 
         # Lagrange points
         self.lagrange_pattern = r"(HUR|ARC|MIC|CRU)L-?\d+"
@@ -156,7 +162,101 @@ class LocationHierarchy:
         if check_body in self.nyx_planets:
             return "Nyx"
 
+        # Check Pyro system
+        if check_body in self.pyro_planets:
+            return "Pyro"
+
+        # Check moons
+        for planet in self.stanton_moons:
+            if check_body in self.stanton_moons[planet]:
+                return "Stanton"
+        for planet in self.pyro_moons:
+            if check_body in self.pyro_moons[planet]:
+                return "Pyro"
+
         return None
+
+    def get_system_for_location(self, location: str) -> Optional[str]:
+        """
+        Determine which system a location belongs to.
+
+        Args:
+            location: Location name string
+
+        Returns:
+            System name (Stanton, Nyx, Pyro) or None if unknown
+        """
+        if not location:
+            return None
+
+        # Parse the location
+        _, body, parent = self.parse_location(location)
+
+        # Try internal method first
+        system = self._get_system(body, parent)
+        if system:
+            return system
+
+        # Try pattern matching on the location name
+        loc_lower = location.lower()
+
+        # Stanton indicators
+        stanton_patterns = [
+            "hurston", "arccorp", "microtech", "crusader",
+            "lorville", "area 18", "orison", "new babbage",
+            "hur-", "arc-", "mic-", "cru-",
+            "aberdeen", "arial", "magda", "ita",
+            "lyria", "wala",
+            "calliope", "clio", "euterpe",
+            "cellin", "daymar", "yela",
+            "everus", "baijini", "seraphim", "tressler",
+            "grimm hex", "grim hex"
+        ]
+
+        for pattern in stanton_patterns:
+            if pattern in loc_lower:
+                return "Stanton"
+
+        # Nyx indicators
+        if "delamar" in loc_lower or "levski" in loc_lower:
+            return "Nyx"
+        if "nyx gateway" in loc_lower or "stanton gateway" in loc_lower:
+            return "Nyx"
+
+        # Pyro indicators
+        pyro_patterns = [
+            "pyro", "ruin station", "orbituary", "patch city",
+            "checkmate", "endgame", "gaslight",
+            "monox", "bloom", "terminus", "ignis", "vatra"
+        ]
+
+        for pattern in pyro_patterns:
+            if pattern in loc_lower:
+                return "Pyro"
+
+        return None
+
+    def estimate_route_distance(self, locations: list[str]) -> float:
+        """
+        Estimate total route distance using proximity weights.
+
+        Sums the proximity weights between consecutive locations.
+
+        Args:
+            locations: Ordered list of location names
+
+        Returns:
+            Total estimated distance (sum of proximity weights)
+        """
+        if len(locations) < 2:
+            return 0.0
+
+        total = 0.0
+        for i in range(len(locations) - 1):
+            weight = self.calculate_proximity_weight(locations[i], locations[i + 1])
+            total += weight
+
+        return total
 
     def calculate_proximity_weight(self, loc1: str, loc2: str) -> int:
         """
