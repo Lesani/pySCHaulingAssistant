@@ -334,16 +334,26 @@ async function syncScans(request, env, user) {
 
   // Upload local scans
   let inserted = 0;
+  let updated = 0;
   let duplicates = 0;
 
   for (const scan of localScans) {
     try {
       const existing = await env.DB.prepare(
-        'SELECT id FROM scans WHERE id = ?'
+        'SELECT id, scan_location FROM scans WHERE id = ?'
       ).bind(scan.id).first();
 
       if (existing) {
-        duplicates++;
+        // Check if scan_location has changed and needs updating
+        const newLocation = scan.scan_location || null;
+        if (existing.scan_location !== newLocation) {
+          await env.DB.prepare(
+            'UPDATE scans SET scan_location = ? WHERE id = ?'
+          ).bind(newLocation, scan.id).run();
+          updated++;
+        } else {
+          duplicates++;
+        }
         continue;
       }
 
@@ -372,21 +382,16 @@ async function syncScans(request, env, user) {
   }
 
   // Get scans uploaded since last sync (excluding ones we just uploaded)
-  const localIds = localScans.map(s => s.id);
-  let query = 'SELECT * FROM scans WHERE uploaded_at > ?';
-  const params = [lastSync];
+  const localIdSet = new Set(localScans.map(s => s.id));
 
-  if (localIds.length > 0) {
-    // Exclude scans we just uploaded
-    const placeholders = localIds.map(() => '?').join(',');
-    query += ` AND id NOT IN (${placeholders})`;
-    params.push(...localIds);
-  }
-
-  query += ' ORDER BY uploaded_at DESC LIMIT 500';
-
+  // Fetch scans without excluding in SQL to avoid "too many SQL variables" error
+  // Filter out local scans in JavaScript instead
+  const query = 'SELECT * FROM scans WHERE uploaded_at > ? ORDER BY uploaded_at DESC LIMIT 1000';
   const stmt = env.DB.prepare(query);
-  const { results } = await stmt.bind(...params).all();
+  const { results: allResults } = await stmt.bind(lastSync).all();
+
+  // Filter out scans the client already has
+  const results = allResults.filter(row => !localIdSet.has(row.id)).slice(0, 500);
 
   const newScans = results.map(row => ({
     id: row.id,
@@ -406,6 +411,7 @@ async function syncScans(request, env, user) {
   return jsonResponse({
     success: true,
     uploaded: inserted,
+    updated,
     duplicates,
     downloaded: newScans,
     sync_timestamp: uploadedAt,

@@ -617,6 +617,7 @@ class ScanDatabaseTab(QWidget):
 
         if result.get("success"):
             uploaded = result.get("uploaded", 0)
+            updated = result.get("updated", 0)
             duplicates = result.get("duplicates", 0)
             downloaded = result.get("downloaded", [])
 
@@ -649,11 +650,13 @@ class ScanDatabaseTab(QWidget):
             username = self.sync_service.get_username() or "Unknown"
             summary = f"Sync complete! (as {username})\n\n"
             summary += f"Uploaded: {uploaded} new scans\n"
+            if updated > 0:
+                summary += f"Updated: {updated} scan locations\n"
             summary += f"Skipped: {duplicates} duplicates\n"
             summary += f"Downloaded: {imported} new scans from others"
 
             QMessageBox.information(self, "Sync Complete", summary)
-            logger.info(f"Sync complete: uploaded {uploaded}, downloaded {imported}")
+            logger.info(f"Sync complete: uploaded {uploaded}, updated {updated}, downloaded {imported}")
 
         else:
             QMessageBox.critical(
