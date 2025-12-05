@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QPushButton, QSpinBox, QComboBox, QCheckBox, QLineEdit,
     QTreeWidget, QTreeWidgetItem, QHeaderView, QCompleter,
-    QRadioButton, QButtonGroup, QSplitter, QFrame, QProgressBar,
+    QSplitter, QFrame, QProgressBar, QSlider,
     QApplication, QScrollArea
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
@@ -23,6 +23,7 @@ from src.location_autocomplete import LocationMatcher
 from src.ship_profiles import ShipManager, SHIP_PROFILES
 from src.services.route_finder_service import (
     RouteFinderService, RouteFinderFilters, OptimizationGoal,
+    OptimizationWeights, OPTIMIZATION_PRESETS, SearchStrategy,
     CandidateRoute, RANK_HIERARCHY
 )
 from src.services.location_type_classifier import LocationType, LocationTypeClassifier
@@ -38,16 +39,25 @@ class RouteFinderWorker(QThread):
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
-    def __init__(self, service: RouteFinderService, filters: RouteFinderFilters, goal: OptimizationGoal):
+    def __init__(
+        self,
+        service: RouteFinderService,
+        filters: RouteFinderFilters,
+        weights: OptimizationWeights,
+        strategy: SearchStrategy = SearchStrategy.FAST
+    ):
         super().__init__()
         self.service = service
         self.filters = filters
-        self.goal = goal
+        self.weights = weights
+        self.strategy = strategy
 
     def run(self):
         try:
             self.progress.emit("Filtering missions...")
-            routes = self.service.find_best_routes(self.filters, self.goal, max_results=15)
+            routes = self.service.find_best_routes(
+                self.filters, self.weights, max_results=15, strategy=self.strategy
+            )
             self.finished.emit(routes)
         except Exception as e:
             logger.error(f"Route finder error: {e}")
@@ -259,26 +269,77 @@ class RouteFinderTab(QWidget):
         ship_group.setLayout(ship_layout)
         filters_layout.addWidget(ship_group)
 
-        # Optimization goal
-        goal_group = QGroupBox("Optimization Goal")
-        goal_layout = QVBoxLayout()
+        # Search strategy
+        strategy_group = QGroupBox("Search Strategy")
+        strategy_layout = QVBoxLayout()
 
-        self.goal_group = QButtonGroup(self)
-        goals = [
-            (OptimizationGoal.MAX_REWARD, "Maximum Reward"),
-            (OptimizationGoal.FEWEST_STOPS, "Fewest Stops"),
-            (OptimizationGoal.MIN_DISTANCE, "Minimum Distance"),
-            (OptimizationGoal.BEST_REWARD_PER_STOP, "Best Reward per Stop"),
-            (OptimizationGoal.BEST_REWARD_PER_SCU, "Best Reward per SCU"),
+        self.strategy_combo = QComboBox()
+        self.strategy_combo.addItem(
+            SearchStrategy.display_name(SearchStrategy.FAST),
+            SearchStrategy.FAST
+        )
+        self.strategy_combo.addItem(
+            SearchStrategy.display_name(SearchStrategy.BETTER),
+            SearchStrategy.BETTER
+        )
+        self.strategy_combo.setToolTip(
+            "Fast: Quick search prioritizing location sharing\n"
+            "Better: Thorough beam search (slower but finds better routes)"
+        )
+        strategy_layout.addWidget(self.strategy_combo)
+
+        strategy_group.setLayout(strategy_layout)
+        filters_layout.addWidget(strategy_group)
+
+        # Optimization weights
+        goal_group = QGroupBox("Optimization Weights")
+        goal_layout = QVBoxLayout()
+        goal_layout.setSpacing(4)
+
+        self.weight_sliders = {}
+        self.weight_labels = {}
+
+        slider_configs = [
+            (OptimizationGoal.MAX_REWARD, "Max Reward", 100),
+            (OptimizationGoal.FEWEST_STOPS, "Fewest Stops", 0),
+            (OptimizationGoal.MIN_DISTANCE, "Min Distance", 0),
+            (OptimizationGoal.BEST_REWARD_PER_STOP, "Reward/Stop", 0),
+            (OptimizationGoal.BEST_REWARD_PER_SCU, "Reward/SCU", 0),
         ]
 
-        for i, (goal, label) in enumerate(goals):
-            rb = QRadioButton(label)
-            rb.setProperty("goal", goal)
-            if i == 0:
-                rb.setChecked(True)
-            self.goal_group.addButton(rb)
-            goal_layout.addWidget(rb)
+        for goal, label, default_val in slider_configs:
+            row = QHBoxLayout()
+            row.setSpacing(8)
+
+            name_label = QLabel(f"{label}:")
+            name_label.setMinimumWidth(85)
+            row.addWidget(name_label)
+
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(0, 100)
+            slider.setValue(default_val)
+            slider.setTickPosition(QSlider.TickPosition.NoTicks)
+            slider.valueChanged.connect(self._on_weight_changed)
+            self.weight_sliders[goal] = slider
+            row.addWidget(slider, 1)
+
+            value_label = QLabel(f"{default_val}%")
+            value_label.setMinimumWidth(35)
+            value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.weight_labels[goal] = value_label
+            row.addWidget(value_label)
+
+            goal_layout.addLayout(row)
+
+        # Preset buttons
+        preset_layout = QHBoxLayout()
+        preset_layout.setSpacing(4)
+        for preset_name in OPTIMIZATION_PRESETS.keys():
+            btn = QPushButton(preset_name)
+            btn.setFixedHeight(24)
+            btn.clicked.connect(lambda checked, name=preset_name: self._apply_preset(name))
+            preset_layout.addWidget(btn)
+        goal_layout.addLayout(preset_layout)
 
         goal_group.setLayout(goal_layout)
         filters_layout.addWidget(goal_group)
@@ -393,10 +454,8 @@ class RouteFinderTab(QWidget):
         self.min_reward.setValue(0)
         self.max_reward.setValue(0)
 
-        # Set first radio button
-        for btn in self.goal_group.buttons():
-            btn.setChecked(btn.property("goal") == OptimizationGoal.MAX_REWARD)
-            break
+        # Reset sliders to Max Profit preset
+        self._apply_preset("Max Profit")
 
     def _get_filters(self) -> RouteFinderFilters:
         """Get current filter settings."""
@@ -440,12 +499,36 @@ class RouteFinderTab(QWidget):
             round_trip=self.round_trip.isChecked()
         )
 
-    def _get_selected_goal(self) -> OptimizationGoal:
-        """Get selected optimization goal."""
-        for btn in self.goal_group.buttons():
-            if btn.isChecked():
-                return btn.property("goal")
-        return OptimizationGoal.MAX_REWARD
+    def _on_weight_changed(self):
+        """Update weight label when slider moves."""
+        for goal, slider in self.weight_sliders.items():
+            self.weight_labels[goal].setText(f"{slider.value()}%")
+
+    def _apply_preset(self, preset_name: str):
+        """Apply a preset weight configuration."""
+        preset = OPTIMIZATION_PRESETS.get(preset_name)
+        if not preset:
+            return
+
+        self.weight_sliders[OptimizationGoal.MAX_REWARD].setValue(preset.max_reward)
+        self.weight_sliders[OptimizationGoal.FEWEST_STOPS].setValue(preset.fewest_stops)
+        self.weight_sliders[OptimizationGoal.MIN_DISTANCE].setValue(preset.min_distance)
+        self.weight_sliders[OptimizationGoal.BEST_REWARD_PER_STOP].setValue(preset.reward_per_stop)
+        self.weight_sliders[OptimizationGoal.BEST_REWARD_PER_SCU].setValue(preset.reward_per_scu)
+
+    def _get_weights(self) -> OptimizationWeights:
+        """Get current optimization weights from sliders."""
+        return OptimizationWeights(
+            max_reward=self.weight_sliders[OptimizationGoal.MAX_REWARD].value(),
+            fewest_stops=self.weight_sliders[OptimizationGoal.FEWEST_STOPS].value(),
+            min_distance=self.weight_sliders[OptimizationGoal.MIN_DISTANCE].value(),
+            reward_per_stop=self.weight_sliders[OptimizationGoal.BEST_REWARD_PER_STOP].value(),
+            reward_per_scu=self.weight_sliders[OptimizationGoal.BEST_REWARD_PER_SCU].value(),
+        )
+
+    def _get_strategy(self) -> SearchStrategy:
+        """Get selected search strategy."""
+        return self.strategy_combo.currentData() or SearchStrategy.FAST
 
     def _find_routes(self):
         """Start route finding."""
@@ -453,7 +536,8 @@ class RouteFinderTab(QWidget):
             return  # Already running
 
         filters = self._get_filters()
-        goal = self._get_selected_goal()
+        weights = self._get_weights()
+        strategy = self._get_strategy()
 
         # Validate
         if not filters.allowed_location_types:
@@ -461,6 +545,9 @@ class RouteFinderTab(QWidget):
             return
         if not filters.allowed_systems:
             self.status_label.setText("Error: Select at least one system")
+            return
+        if not weights.is_valid():
+            self.status_label.setText("Error: Set at least one optimization weight > 0")
             return
 
         # Start worker
@@ -470,7 +557,7 @@ class RouteFinderTab(QWidget):
         self.results_tree.clear()
         self.results_label.setText("Searching for routes...")
 
-        self._worker = RouteFinderWorker(self.service, filters, goal)
+        self._worker = RouteFinderWorker(self.service, filters, weights, strategy)
         self._worker.finished.connect(self._on_routes_found)
         self._worker.error.connect(self._on_route_error)
         self._worker.progress.connect(self._on_progress)

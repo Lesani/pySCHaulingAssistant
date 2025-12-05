@@ -42,6 +42,117 @@ class OptimizationGoal(Enum):
         return names.get(goal, str(goal.value))
 
 
+@dataclass
+class OptimizationWeights:
+    """Weights for multi-goal optimization (each 0-100)."""
+    max_reward: int = 100
+    fewest_stops: int = 0
+    min_distance: int = 0
+    reward_per_stop: int = 0
+    reward_per_scu: int = 0
+
+    def is_valid(self) -> bool:
+        """Check if at least one weight is non-zero."""
+        return any([
+            self.max_reward, self.fewest_stops, self.min_distance,
+            self.reward_per_stop, self.reward_per_scu
+        ])
+
+    def normalized(self) -> Dict[OptimizationGoal, float]:
+        """Return weights normalized to sum to 1.0."""
+        total = (self.max_reward + self.fewest_stops + self.min_distance +
+                 self.reward_per_stop + self.reward_per_scu)
+        if total == 0:
+            return {OptimizationGoal.MAX_REWARD: 1.0}
+        return {
+            OptimizationGoal.MAX_REWARD: self.max_reward / total,
+            OptimizationGoal.FEWEST_STOPS: self.fewest_stops / total,
+            OptimizationGoal.MIN_DISTANCE: self.min_distance / total,
+            OptimizationGoal.BEST_REWARD_PER_STOP: self.reward_per_stop / total,
+            OptimizationGoal.BEST_REWARD_PER_SCU: self.reward_per_scu / total,
+        }
+
+    def get_dominant_goal(self) -> OptimizationGoal:
+        """Get the goal with the highest weight (for greedy sorting)."""
+        weights = [
+            (self.max_reward, OptimizationGoal.MAX_REWARD),
+            (self.fewest_stops, OptimizationGoal.FEWEST_STOPS),
+            (self.min_distance, OptimizationGoal.MIN_DISTANCE),
+            (self.reward_per_stop, OptimizationGoal.BEST_REWARD_PER_STOP),
+            (self.reward_per_scu, OptimizationGoal.BEST_REWARD_PER_SCU),
+        ]
+        return max(weights, key=lambda x: x[0])[1]
+
+
+class SearchStrategy(Enum):
+    """Search strategy for route finding."""
+    FAST = "fast"       # Greedy with location affinity
+    BETTER = "better"   # Beam search
+
+    @classmethod
+    def display_name(cls, strategy: 'SearchStrategy') -> str:
+        """Get display name for a strategy."""
+        names = {
+            cls.FAST: "Fast (Greedy + Affinity)",
+            cls.BETTER: "Better (Beam Search)",
+        }
+        return names.get(strategy, str(strategy.value))
+
+
+@dataclass
+class PartialSolution:
+    """A partial solution for beam search."""
+    selected_scans: List[Dict[str, Any]]
+    locations: Set[str]
+    total_reward: float
+    total_scu: int
+    score: float = 0.0
+
+    def copy(self) -> 'PartialSolution':
+        """Create a copy of this solution."""
+        return PartialSolution(
+            selected_scans=list(self.selected_scans),
+            locations=set(self.locations),
+            total_reward=self.total_reward,
+            total_scu=self.total_scu,
+            score=self.score
+        )
+
+
+# Search strategy constants
+BEAM_WIDTH = 10
+AFFINITY_OVERLAP_BONUS = 0.15  # 15% of reward per shared location
+AFFINITY_NEW_PENALTY = 0.05   # 5% of reward per new location
+
+
+# Optimization presets
+OPTIMIZATION_PRESETS: Dict[str, 'OptimizationWeights'] = {
+    "Max Profit": None,  # Will be set after class is defined
+    "Balanced": None,
+    "Efficiency": None,
+    "Quick Run": None,
+}
+
+
+def _init_presets():
+    """Initialize presets after OptimizationWeights is defined."""
+    OPTIMIZATION_PRESETS["Max Profit"] = OptimizationWeights(max_reward=100)
+    OPTIMIZATION_PRESETS["Balanced"] = OptimizationWeights(
+        max_reward=40, fewest_stops=20, min_distance=20,
+        reward_per_stop=10, reward_per_scu=10
+    )
+    OPTIMIZATION_PRESETS["Efficiency"] = OptimizationWeights(
+        max_reward=20, fewest_stops=30, min_distance=0,
+        reward_per_stop=30, reward_per_scu=20
+    )
+    OPTIMIZATION_PRESETS["Quick Run"] = OptimizationWeights(
+        max_reward=20, fewest_stops=50, min_distance=30
+    )
+
+
+_init_presets()
+
+
 # Rank hierarchy (index = level, higher = better)
 RANK_HIERARCHY = [
     "Trainee", "Rookie", "Junior", "Member",
@@ -208,20 +319,25 @@ class RouteFinderService:
     def find_best_routes(
         self,
         filters: RouteFinderFilters,
-        goal: OptimizationGoal,
-        max_results: int = 10
+        weights: OptimizationWeights = None,
+        max_results: int = 10,
+        strategy: SearchStrategy = SearchStrategy.FAST
     ) -> List[CandidateRoute]:
         """
-        Find the best routes matching filters and optimization goal.
+        Find the best routes matching filters and optimization weights.
 
         Args:
             filters: RouteFinderFilters with criteria
-            goal: OptimizationGoal to optimize for
+            weights: OptimizationWeights for multi-goal optimization (defaults to MAX_REWARD only)
             max_results: Maximum number of routes to return
+            strategy: SearchStrategy to use (FAST or BETTER)
 
         Returns:
             List of CandidateRoute, sorted by score (best first)
         """
+        if weights is None:
+            weights = OptimizationWeights()  # Defaults to max_reward=100
+
         # Filter missions
         matching_scans = self.filter_missions(filters)
 
@@ -229,12 +345,14 @@ class RouteFinderService:
             logger.info("No matching missions found")
             return []
 
-        # Build routes
-        candidates = self._build_routes(matching_scans, filters, goal)
+        # Build routes using selected strategy
+        candidates = self._build_routes(matching_scans, filters, weights, strategy)
 
-        # Sort by score (descending for most goals)
-        reverse = goal not in [OptimizationGoal.FEWEST_STOPS, OptimizationGoal.MIN_DISTANCE]
-        candidates.sort(key=lambda c: c.score, reverse=reverse)
+        # Apply weighted normalization to recalculate scores
+        self._normalize_and_weight_scores(candidates, weights)
+
+        # Sort by weighted score (higher is always better now)
+        candidates.sort(key=lambda c: c.score, reverse=True)
 
         # Return top results
         return candidates[:max_results]
@@ -243,26 +361,30 @@ class RouteFinderService:
         self,
         scans: List[Dict[str, Any]],
         filters: RouteFinderFilters,
-        goal: OptimizationGoal
+        weights: OptimizationWeights,
+        strategy: SearchStrategy
     ) -> List[CandidateRoute]:
         """
         Build candidate routes from filtered scans.
 
-        Uses different strategies based on dataset size.
+        Uses different strategies based on strategy parameter and dataset size.
         """
-        candidates = []
         ship = self.ship_manager.get_ship(filters.ship_key) or SHIP_PROFILES.get(filters.ship_key)
         ship_capacity = ship.cargo_capacity_scu if ship else 128
+        goal = weights.get_dominant_goal()
 
-        # Determine strategy based on scan count
+        # Small datasets: always use combinatorial (exhaustive)
         if len(scans) <= 8:
-            # Small set: enumerate combinations
-            candidates = self._build_routes_combinatorial(scans, filters, goal, ship_capacity)
-        else:
-            # Larger set: greedy construction
-            candidates = self._build_routes_greedy(scans, filters, goal, ship_capacity)
+            return self._build_routes_combinatorial(scans, filters, goal, ship_capacity)
 
-        return candidates
+        # Larger datasets: use selected strategy
+        if strategy == SearchStrategy.FAST:
+            return self._build_routes_greedy_affinity(scans, filters, weights, ship_capacity)
+        elif strategy == SearchStrategy.BETTER:
+            return self._build_routes_beam_search(scans, filters, weights, ship_capacity)
+        else:
+            # Fallback to greedy affinity
+            return self._build_routes_greedy_affinity(scans, filters, weights, ship_capacity)
 
     def _build_routes_combinatorial(
         self,
@@ -308,9 +430,17 @@ class RouteFinderService:
         # Sort scans by goal-relevant metric
         sorted_scans = self._sort_scans_by_goal(scans, goal)
 
-        # Build routes of increasing size
-        for end_idx in range(1, min(len(sorted_scans) + 1, filters.max_stops * 2)):
-            mission_scans = sorted_scans[:end_idx]
+        # Build routes incrementally, stopping when we exceed max_stops
+        mission_scans = []
+        for scan in sorted_scans:
+            mission_scans.append(scan)
+
+            # Check if adding more would definitely exceed max_stops
+            estimated = self._estimate_stop_count(mission_scans)
+            if estimated > filters.max_stops:
+                # Remove the last one and stop adding
+                mission_scans.pop()
+                break
 
             candidate = self._try_build_route(mission_scans, filters, goal, ship_capacity)
             if candidate:
@@ -319,12 +449,188 @@ class RouteFinderService:
         # Also try some random samples if dataset is large
         if len(scans) > 15:
             import random
+            # Limit sample size based on typical stops per mission
+            max_missions = max(1, filters.max_stops // 2)
             for _ in range(20):  # Try 20 random samples
-                sample_size = random.randint(1, min(filters.max_stops, len(scans)))
+                sample_size = random.randint(1, min(max_missions, len(scans)))
                 sample = random.sample(scans, sample_size)
                 candidate = self._try_build_route(sample, filters, goal, ship_capacity)
                 if candidate:
                     candidates.append(candidate)
+
+        return candidates
+
+    def _build_routes_greedy_affinity(
+        self,
+        scans: List[Dict[str, Any]],
+        filters: RouteFinderFilters,
+        weights: OptimizationWeights,
+        ship_capacity: int
+    ) -> List[CandidateRoute]:
+        """
+        Build routes using greedy selection with location affinity.
+
+        Prioritizes missions that share locations with already-selected missions,
+        naturally building tighter routes with fewer stops.
+        """
+        candidates = []
+        goal = weights.get_dominant_goal()
+
+        # Score all scans with base score (by dominant goal)
+        scored_scans = []
+        for scan in scans:
+            base_score = self._get_scan_reward(scan)
+            if goal == OptimizationGoal.BEST_REWARD_PER_SCU:
+                scu = self._get_scan_scu(scan)
+                base_score = base_score / scu if scu > 0 else 0
+            scored_scans.append((scan, base_score))
+
+        # Sort by base score descending
+        scored_scans.sort(key=lambda x: x[1], reverse=True)
+
+        selected_scans = []
+        selected_locations: Set[str] = set()
+
+        # Greedily select missions considering affinity
+        available = list(scored_scans)
+
+        while available:
+            best_scan = None
+            best_combined_score = float('-inf')
+
+            for scan, base_score in available:
+                scan_locs = self._get_scan_locations(scan)
+                potential_locs = selected_locations | scan_locs
+
+                # Skip if would exceed max_stops
+                if len(potential_locs) > filters.max_stops:
+                    continue
+
+                # Calculate combined score with affinity
+                affinity = self._calculate_affinity_score(scan, selected_locations, weights)
+                combined = base_score + affinity
+
+                if combined > best_combined_score:
+                    best_combined_score = combined
+                    best_scan = scan
+
+            if best_scan is None:
+                break  # No more valid scans
+
+            # Add best scan
+            selected_scans.append(best_scan)
+            selected_locations |= self._get_scan_locations(best_scan)
+
+            # Remove from available
+            available = [(s, score) for s, score in available if s is not best_scan]
+
+            # Try to build route from current selection
+            candidate = self._try_build_route(selected_scans, filters, goal, ship_capacity)
+            if candidate:
+                candidates.append(candidate)
+
+        return candidates
+
+    def _build_routes_beam_search(
+        self,
+        scans: List[Dict[str, Any]],
+        filters: RouteFinderFilters,
+        weights: OptimizationWeights,
+        ship_capacity: int
+    ) -> List[CandidateRoute]:
+        """
+        Build routes using beam search.
+
+        Maintains top K partial solutions at each step, exploring multiple
+        paths to find better route combinations.
+        """
+        goal = weights.get_dominant_goal()
+
+        # Initialize beam with empty solution
+        beam: List[PartialSolution] = [
+            PartialSolution(
+                selected_scans=[],
+                locations=set(),
+                total_reward=0,
+                total_scu=0,
+                score=0
+            )
+        ]
+
+        # Pre-compute scan data
+        scan_data = []
+        for scan in scans:
+            scan_data.append({
+                'scan': scan,
+                'locations': self._get_scan_locations(scan),
+                'reward': self._get_scan_reward(scan),
+                'scu': self._get_scan_scu(scan),
+            })
+
+        # Iterate beam search
+        iterations = 0
+        max_iterations = min(len(scans), filters.max_stops * 2)
+
+        while iterations < max_iterations:
+            iterations += 1
+            next_beam: List[PartialSolution] = []
+
+            for partial in beam:
+                # Track which scans are already selected (by index)
+                selected_indices = set()
+                for sel_scan in partial.selected_scans:
+                    for i, sd in enumerate(scan_data):
+                        if sd['scan'] is sel_scan:
+                            selected_indices.add(i)
+                            break
+
+                # Try adding each remaining scan
+                for i, sd in enumerate(scan_data):
+                    if i in selected_indices:
+                        continue
+
+                    # Check if adding would exceed max_stops
+                    new_locs = partial.locations | sd['locations']
+                    if len(new_locs) > filters.max_stops:
+                        continue
+
+                    # Create new partial solution
+                    new_partial = partial.copy()
+                    new_partial.selected_scans.append(sd['scan'])
+                    new_partial.locations = new_locs
+                    new_partial.total_reward += sd['reward']
+                    new_partial.total_scu += sd['scu']
+                    new_partial.score = self._score_partial_solution(new_partial, weights)
+
+                    next_beam.append(new_partial)
+
+            if not next_beam:
+                break  # No more expansions possible
+
+            # Keep top K solutions (beam width)
+            next_beam.sort(key=lambda p: p.score, reverse=True)
+            beam = next_beam[:BEAM_WIDTH]
+
+        # Build actual routes from final beam solutions
+        candidates = []
+        seen_keys: Set[frozenset] = set()
+
+        for partial in beam:
+            if not partial.selected_scans:
+                continue
+
+            # Dedup by scan set
+            key = frozenset(id(s) for s in partial.selected_scans)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+
+            # Try to build actual route
+            candidate = self._try_build_route(
+                partial.selected_scans, filters, goal, ship_capacity
+            )
+            if candidate:
+                candidates.append(candidate)
 
         return candidates
 
@@ -357,6 +663,99 @@ class RouteFinderService:
             # Default: by reward
             return sorted(scans, key=get_reward, reverse=True)
 
+    def _estimate_stop_count(self, mission_scans: List[Dict[str, Any]]) -> int:
+        """Estimate minimum stops for a set of missions (before VRP solving)."""
+        # Collect all unique locations
+        locations = set()
+        for scan in mission_scans:
+            for obj in scan.get("mission_data", {}).get("objectives", []):
+                locations.add(obj.get("collect_from", ""))
+                locations.add(obj.get("deliver_to", ""))
+        locations.discard("")
+        return len(locations)
+
+    def _get_scan_locations(self, scan: Dict[str, Any]) -> Set[str]:
+        """Extract all unique locations from a scan."""
+        locations = set()
+        for obj in scan.get("mission_data", {}).get("objectives", []):
+            collect = obj.get("collect_from", "")
+            deliver = obj.get("deliver_to", "")
+            if collect:
+                locations.add(collect)
+            if deliver:
+                locations.add(deliver)
+        return locations
+
+    def _get_scan_reward(self, scan: Dict[str, Any]) -> float:
+        """Get total reward from a scan."""
+        return scan.get("mission_data", {}).get("reward", 0)
+
+    def _get_scan_scu(self, scan: Dict[str, Any]) -> int:
+        """Get total SCU from a scan."""
+        objs = scan.get("mission_data", {}).get("objectives", [])
+        return sum(o.get("scu_amount", 0) for o in objs)
+
+    def _calculate_affinity_score(
+        self,
+        scan: Dict[str, Any],
+        selected_locations: Set[str],
+        weights: OptimizationWeights
+    ) -> float:
+        """
+        Calculate affinity bonus for a scan based on location overlap.
+
+        Returns a bonus that rewards sharing locations with already-selected missions.
+        """
+        if not selected_locations:
+            return 0.0  # First mission, no affinity
+
+        scan_locations = self._get_scan_locations(scan)
+        base_reward = self._get_scan_reward(scan)
+
+        # Count overlapping and new locations
+        overlap_count = len(scan_locations & selected_locations)
+        new_count = len(scan_locations - selected_locations)
+
+        # Scale by fewest_stops weight (higher = stronger affinity preference)
+        stop_weight = max(0.1, weights.fewest_stops / 100.0)
+
+        affinity = (
+            overlap_count * base_reward * AFFINITY_OVERLAP_BONUS * stop_weight -
+            new_count * base_reward * AFFINITY_NEW_PENALTY * stop_weight
+        )
+
+        return affinity
+
+    def _score_partial_solution(
+        self,
+        partial: PartialSolution,
+        weights: OptimizationWeights
+    ) -> float:
+        """
+        Score a partial solution for beam search ranking.
+
+        Uses similar logic to final scoring but works on estimated data.
+        """
+        norm_weights = weights.normalized()
+        estimated_stops = len(partial.locations)
+
+        if estimated_stops == 0 or partial.total_reward == 0:
+            return 0.0
+
+        # Calculate component scores
+        scores = {
+            OptimizationGoal.MAX_REWARD: partial.total_reward,
+            OptimizationGoal.FEWEST_STOPS: partial.total_reward / (estimated_stops ** 1.5),
+            OptimizationGoal.MIN_DISTANCE: partial.total_reward / (estimated_stops ** 1.5),
+            OptimizationGoal.BEST_REWARD_PER_STOP: partial.total_reward / estimated_stops,
+            OptimizationGoal.BEST_REWARD_PER_SCU: (
+                partial.total_reward / partial.total_scu if partial.total_scu > 0 else 0
+            ),
+        }
+
+        # Weighted sum
+        return sum(scores.get(goal, 0) * w for goal, w in norm_weights.items())
+
     def _try_build_route(
         self,
         mission_scans: List[Dict[str, Any]],
@@ -366,6 +765,11 @@ class RouteFinderService:
     ) -> Optional[CandidateRoute]:
         """Try to build a route from mission scans, return None if infeasible."""
         try:
+            # Quick check: estimate stops before expensive VRP solving
+            estimated_stops = self._estimate_stop_count(mission_scans)
+            if estimated_stops > filters.max_stops:
+                return None
+
             # Convert scans to Mission objects
             missions = []
             for scan in mission_scans:
@@ -387,11 +791,14 @@ class RouteFinderService:
             if not is_feasible:
                 return None
 
-            # Solve route
-            route = solver.solve(missions, optimization_level='medium')
+            # Solve route with max_stops limit (returns None if exceeded)
+            route = solver.solve(
+                missions,
+                optimization_level='medium',
+                max_stops=filters.max_stops
+            )
 
-            # Check max stops constraint
-            if route.total_stops > filters.max_stops:
+            if route is None:
                 return None
 
             # Handle round trip
@@ -465,6 +872,33 @@ class RouteFinderService:
             estimated_distance=estimated_distance
         )
 
+    def _calculate_raw_scores(self, metrics: RouteMetrics) -> Dict[OptimizationGoal, float]:
+        """Calculate raw scores for all optimization goals."""
+        scores = {}
+
+        # MAX_REWARD: higher is better
+        scores[OptimizationGoal.MAX_REWARD] = metrics.total_reward
+
+        # FEWEST_STOPS: lower stops is better -> use reward/stops^1.5
+        if metrics.stop_count > 0:
+            scores[OptimizationGoal.FEWEST_STOPS] = metrics.total_reward / (metrics.stop_count ** 1.5)
+        else:
+            scores[OptimizationGoal.FEWEST_STOPS] = 0
+
+        # MIN_DISTANCE: lower distance is better -> use reward/distance^1.5
+        if metrics.estimated_distance > 0:
+            scores[OptimizationGoal.MIN_DISTANCE] = metrics.total_reward / (metrics.estimated_distance ** 1.5)
+        else:
+            scores[OptimizationGoal.MIN_DISTANCE] = metrics.total_reward
+
+        # REWARD_PER_STOP: higher is better
+        scores[OptimizationGoal.BEST_REWARD_PER_STOP] = metrics.reward_per_stop
+
+        # REWARD_PER_SCU: higher is better
+        scores[OptimizationGoal.BEST_REWARD_PER_SCU] = metrics.reward_per_scu
+
+        return scores
+
     def _calculate_score(self, metrics: RouteMetrics, goal: OptimizationGoal) -> float:
         """Calculate score for a route based on optimization goal."""
         if goal == OptimizationGoal.MAX_REWARD:
@@ -491,6 +925,59 @@ class RouteFinderService:
             return metrics.reward_per_scu
 
         return 0
+
+    def _normalize_and_weight_scores(
+        self,
+        candidates: List[CandidateRoute],
+        weights: OptimizationWeights
+    ) -> None:
+        """
+        Normalize scores across candidates and apply weights.
+
+        Uses min-max normalization to ensure each goal contributes proportionally,
+        regardless of different score magnitudes.
+        """
+        if not candidates:
+            return
+
+        norm_weights = weights.normalized()
+
+        # Collect raw scores per goal for all candidates
+        all_raw_scores: Dict[OptimizationGoal, List[float]] = {
+            goal: [] for goal in OptimizationGoal
+        }
+
+        for candidate in candidates:
+            goal_scores = self._calculate_raw_scores(candidate.metrics)
+            for goal, score in goal_scores.items():
+                all_raw_scores[goal].append(score)
+
+        # Calculate min/max per goal for normalization
+        min_max: Dict[OptimizationGoal, tuple] = {}
+        for goal in OptimizationGoal:
+            scores = all_raw_scores[goal]
+            min_val = min(scores) if scores else 0
+            max_val = max(scores) if scores else 0
+            min_max[goal] = (min_val, max_val)
+
+        # Normalize and weight each candidate's score
+        for candidate in candidates:
+            weighted_score = 0.0
+            goal_scores = self._calculate_raw_scores(candidate.metrics)
+
+            for goal, raw in goal_scores.items():
+                min_val, max_val = min_max[goal]
+
+                # Normalize to [0, 1] range
+                if max_val > min_val:
+                    normalized = (raw - min_val) / (max_val - min_val)
+                else:
+                    normalized = 1.0  # All candidates have same value
+
+                # Apply weight
+                weighted_score += normalized * norm_weights.get(goal, 0)
+
+            candidate.score = weighted_score
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get statistics about available missions."""

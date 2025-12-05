@@ -90,16 +90,22 @@ class VRPSolver:
         self.ship_capacity = ship_capacity
         self.starting_location = starting_location
 
-    def solve(self, missions: List[Mission], optimization_level: str = 'medium') -> Route:
+    def solve(
+        self,
+        missions: List[Mission],
+        optimization_level: str = 'medium',
+        max_stops: int = None
+    ) -> Route:
         """
         Solve VRP for given missions.
 
         Args:
             missions: List of missions to route
             optimization_level: 'basic', 'medium', or 'advanced'
+            max_stops: Optional limit - returns None if stops would exceed this
 
         Returns:
-            Optimized route
+            Optimized route, or None if max_stops exceeded
 
         Raises:
             ValueError: If route is infeasible (exceeds capacity)
@@ -107,12 +113,21 @@ class VRPSolver:
         if not missions:
             return Route(stops=[])
 
-        logger.info(f"Solving VRP for {len(missions)} missions with {self.ship_capacity} SCU capacity")
-
         # Extract all objectives
         all_objectives = []
         for mission in missions:
             all_objectives.extend(mission.objectives)
+
+        # Quick check: count unique locations before doing any work
+        if max_stops is not None:
+            locations = set()
+            for obj in all_objectives:
+                locations.add(obj.collect_from)
+                locations.add(obj.deliver_to)
+            if len(locations) > max_stops:
+                return None
+
+        logger.info(f"Solving VRP for {len(missions)} missions with {self.ship_capacity} SCU capacity")
 
         # Build route nodes (pickup and delivery pairs)
         nodes = self._build_route_nodes(all_objectives)
