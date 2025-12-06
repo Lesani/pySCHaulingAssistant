@@ -173,19 +173,31 @@ class RouteFinderFilters:
     allowed_location_types: List[str] = field(default_factory=lambda: LocationType.all_types())
     allowed_systems: List[str] = field(default_factory=lambda: ["Stanton", "Nyx", "Pyro"])
     min_rank: Optional[str] = None  # Minimum rank (includes this rank and higher)
+    max_rank: Optional[str] = None  # Maximum rank (includes this rank and lower)
     min_reward: Optional[float] = None
     max_reward: Optional[float] = None
     ship_key: str = "RSI_ZEUS_MK2_CL"
     round_trip: bool = False
 
     def get_allowed_ranks(self) -> Optional[List[str]]:
-        """Get list of allowed ranks based on min_rank."""
-        if not self.min_rank:
+        """Get list of allowed ranks based on min_rank and max_rank."""
+        if not self.min_rank and not self.max_rank:
             return None  # All ranks allowed
 
         try:
-            min_idx = RANK_HIERARCHY.index(self.min_rank)
-            return RANK_HIERARCHY[min_idx:]  # This rank and all higher
+            min_idx = 0
+            max_idx = len(RANK_HIERARCHY) - 1
+
+            if self.min_rank:
+                min_idx = RANK_HIERARCHY.index(self.min_rank)
+            if self.max_rank:
+                max_idx = RANK_HIERARCHY.index(self.max_rank)
+
+            # Handle case where min > max (return empty or swap)
+            if min_idx > max_idx:
+                return []
+
+            return RANK_HIERARCHY[min_idx:max_idx + 1]
         except ValueError:
             return None  # Unknown rank, allow all
 

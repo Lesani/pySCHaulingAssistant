@@ -261,14 +261,20 @@ class RouteFinderTab(QWidget):
         mission_group = QGroupBox("Mission Filters")
         mission_layout = QVBoxLayout()
 
-        # Min rank
+        # Rank range
         rank_layout = QHBoxLayout()
-        rank_layout.addWidget(QLabel("Min Rank:"))
+        rank_layout.addWidget(QLabel("Rank:"))
         self.min_rank = QComboBox()
         self.min_rank.addItem("Any")
         for rank in RANK_HIERARCHY:
             self.min_rank.addItem(rank)
-        rank_layout.addWidget(self.min_rank, 1)
+        rank_layout.addWidget(self.min_rank)
+        rank_layout.addWidget(QLabel("to"))
+        self.max_rank = QComboBox()
+        self.max_rank.addItem("Any")
+        for rank in RANK_HIERARCHY:
+            self.max_rank.addItem(rank)
+        rank_layout.addWidget(self.max_rank)
         mission_layout.addLayout(rank_layout)
 
         # Reward range
@@ -502,6 +508,7 @@ class RouteFinderTab(QWidget):
             cb.setChecked(False)
         self.system_checks["Stanton"].setChecked(True)
         self.min_rank.setCurrentIndex(0)
+        self.max_rank.setCurrentIndex(0)
         self.min_reward.setValue(0)
         self.max_reward.setValue(0)
 
@@ -522,11 +529,15 @@ class RouteFinderTab(QWidget):
             if cb.isChecked()
         ]
 
-        # Get min rank
+        # Get rank range
         min_rank = None
-        rank_text = self.min_rank.currentText()
-        if rank_text != "Any":
-            min_rank = rank_text
+        max_rank = None
+        min_rank_text = self.min_rank.currentText()
+        max_rank_text = self.max_rank.currentText()
+        if min_rank_text != "Any":
+            min_rank = min_rank_text
+        if max_rank_text != "Any":
+            max_rank = max_rank_text
 
         # Get reward range
         min_reward = self.min_reward.value() if self.min_reward.value() > 0 else None
@@ -544,6 +555,7 @@ class RouteFinderTab(QWidget):
             allowed_location_types=allowed_types,
             allowed_systems=allowed_systems,
             min_rank=min_rank,
+            max_rank=max_rank,
             min_reward=min_reward,
             max_reward=max_reward,
             ship_key=ship_key,
