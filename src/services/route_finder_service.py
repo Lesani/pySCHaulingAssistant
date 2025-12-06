@@ -321,7 +321,8 @@ class RouteFinderService:
         filters: RouteFinderFilters,
         weights: OptimizationWeights = None,
         max_results: int = 10,
-        strategy: SearchStrategy = SearchStrategy.FAST
+        strategy: SearchStrategy = SearchStrategy.FAST,
+        offset: int = 0
     ) -> List[CandidateRoute]:
         """
         Find the best routes matching filters and optimization weights.
@@ -331,6 +332,7 @@ class RouteFinderService:
             weights: OptimizationWeights for multi-goal optimization (defaults to MAX_REWARD only)
             max_results: Maximum number of routes to return
             strategy: SearchStrategy to use (FAST or BETTER)
+            offset: Number of routes to skip (for pagination)
 
         Returns:
             List of CandidateRoute, sorted by score (best first)
@@ -345,8 +347,9 @@ class RouteFinderService:
             logger.info("No matching missions found")
             return []
 
-        # Build routes using selected strategy
-        candidates = self._build_routes(matching_scans, filters, weights, strategy)
+        # Build more routes to support pagination
+        total_needed = offset + max_results
+        candidates = self._build_routes(matching_scans, filters, weights, strategy, total_needed)
 
         # Apply weighted normalization to recalculate scores
         self._normalize_and_weight_scores(candidates, weights)
@@ -354,15 +357,16 @@ class RouteFinderService:
         # Sort by weighted score (higher is always better now)
         candidates.sort(key=lambda c: c.score, reverse=True)
 
-        # Return top results
-        return candidates[:max_results]
+        # Return results with offset
+        return candidates[offset:offset + max_results]
 
     def _build_routes(
         self,
         scans: List[Dict[str, Any]],
         filters: RouteFinderFilters,
         weights: OptimizationWeights,
-        strategy: SearchStrategy
+        strategy: SearchStrategy,
+        max_routes: int = 10
     ) -> List[CandidateRoute]:
         """
         Build candidate routes from filtered scans.
@@ -379,12 +383,12 @@ class RouteFinderService:
 
         # Larger datasets: use selected strategy
         if strategy == SearchStrategy.FAST:
-            return self._build_routes_greedy_affinity(scans, filters, weights, ship_capacity)
+            return self._build_routes_greedy_affinity(scans, filters, weights, ship_capacity, max_routes)
         elif strategy == SearchStrategy.BETTER:
             return self._build_routes_beam_search(scans, filters, weights, ship_capacity)
         else:
             # Fallback to greedy affinity
-            return self._build_routes_greedy_affinity(scans, filters, weights, ship_capacity)
+            return self._build_routes_greedy_affinity(scans, filters, weights, ship_capacity, max_routes)
 
     def _build_routes_combinatorial(
         self,
@@ -465,16 +469,18 @@ class RouteFinderService:
         scans: List[Dict[str, Any]],
         filters: RouteFinderFilters,
         weights: OptimizationWeights,
-        ship_capacity: int
+        ship_capacity: int,
+        max_routes: int = 10
     ) -> List[CandidateRoute]:
         """
         Build routes using greedy selection with location affinity.
 
-        Prioritizes missions that share locations with already-selected missions,
-        naturally building tighter routes with fewer stops.
+        Tries multiple starting points to find diverse routes.
+        Returns up to max_routes unique routes.
         """
-        candidates = []
         goal = weights.get_dominant_goal()
+        candidates = []
+        seen_mission_sets: Set[frozenset] = set()
 
         # Score all scans with base score (by dominant goal)
         scored_scans = []
@@ -488,13 +494,57 @@ class RouteFinderService:
         # Sort by base score descending
         scored_scans.sort(key=lambda x: x[1], reverse=True)
 
+        # Try different starting points to get diverse routes
+        num_starts = min(len(scored_scans), max(20, max_routes * 2))
+
+        for start_idx in range(num_starts):
+            if len(candidates) >= max_routes:
+                break
+
+            candidate = self._greedy_from_start(
+                scored_scans, start_idx, filters, weights, goal, ship_capacity
+            )
+
+            if candidate:
+                # Check if this is a unique mission set
+                mission_key = frozenset(id(m) for m in candidate.missions)
+                if mission_key not in seen_mission_sets:
+                    seen_mission_sets.add(mission_key)
+                    candidates.append(candidate)
+
+        return candidates
+
+    def _greedy_from_start(
+        self,
+        scored_scans: List[tuple],
+        start_idx: int,
+        filters: RouteFinderFilters,
+        weights: OptimizationWeights,
+        goal: OptimizationGoal,
+        ship_capacity: int
+    ) -> Optional[CandidateRoute]:
+        """Build one route starting from a specific mission index."""
+        best_candidate = None
         selected_scans = []
         selected_locations: Set[str] = set()
 
-        # Greedily select missions considering affinity
-        available = list(scored_scans)
+        # Start with the specified mission
+        start_scan, _ = scored_scans[start_idx]
+        selected_scans.append(start_scan)
+        selected_locations = self._get_scan_locations(start_scan)
+
+        # Build available list excluding the start
+        available = [(s, score) for i, (s, score) in enumerate(scored_scans) if i != start_idx]
 
         while available:
+            # Stop if we've hit the location limit
+            if len(selected_locations) >= filters.max_stops:
+                break
+
+            # Stop if best candidate already at max stops
+            if best_candidate and best_candidate.route.total_stops >= filters.max_stops:
+                break
+
             best_scan = None
             best_combined_score = float('-inf')
 
@@ -515,21 +565,20 @@ class RouteFinderService:
                     best_scan = scan
 
             if best_scan is None:
-                break  # No more valid scans
+                break
 
-            # Add best scan
             selected_scans.append(best_scan)
             selected_locations |= self._get_scan_locations(best_scan)
-
-            # Remove from available
             available = [(s, score) for s, score in available if s is not best_scan]
 
-            # Try to build route from current selection
             candidate = self._try_build_route(selected_scans, filters, goal, ship_capacity)
             if candidate:
-                candidates.append(candidate)
+                if best_candidate is None or candidate.metrics.total_reward > best_candidate.metrics.total_reward:
+                    best_candidate = candidate
+            elif best_candidate:
+                break
 
-        return candidates
+        return best_candidate
 
     def _build_routes_beam_search(
         self,
@@ -799,6 +848,10 @@ class RouteFinderService:
             )
 
             if route is None:
+                return None
+
+            # Check actual stop count (can exceed unique locations due to revisits)
+            if route.total_stops > filters.max_stops:
                 return None
 
             # Handle round trip

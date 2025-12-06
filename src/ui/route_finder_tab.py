@@ -32,6 +32,38 @@ from src.logger import get_logger
 logger = get_logger()
 
 
+class SortableTreeWidgetItem(QTreeWidgetItem):
+    """Tree widget item with proper numeric sorting for route columns."""
+
+    # Column indices that should be sorted numerically
+    NUMERIC_COLUMNS = {1, 2, 3, 4, 5}  # Reward, Stops, SCU, Missions, Score
+
+    def __lt__(self, other: QTreeWidgetItem) -> bool:
+        """Compare items for sorting."""
+        tree = self.treeWidget()
+        if not tree:
+            return super().__lt__(other)
+
+        col = tree.sortColumn()
+
+        if col in self.NUMERIC_COLUMNS:
+            # Extract numeric value from text (remove formatting like commas, aUEC, etc.)
+            self_val = self._extract_number(self.text(col))
+            other_val = self._extract_number(other.text(col))
+            return self_val < other_val
+
+        return super().__lt__(other)
+
+    def _extract_number(self, text: str) -> float:
+        """Extract numeric value from formatted text."""
+        # Remove common suffixes and formatting
+        cleaned = text.replace(",", "").replace(" aUEC", "").replace(" SCU", "").strip()
+        try:
+            return float(cleaned)
+        except ValueError:
+            return 0.0
+
+
 class RouteFinderWorker(QThread):
     """Background worker for route finding."""
 
@@ -44,19 +76,26 @@ class RouteFinderWorker(QThread):
         service: RouteFinderService,
         filters: RouteFinderFilters,
         weights: OptimizationWeights,
-        strategy: SearchStrategy = SearchStrategy.FAST
+        strategy: SearchStrategy = SearchStrategy.FAST,
+        offset: int = 0,
+        max_results: int = 10
     ):
         super().__init__()
         self.service = service
         self.filters = filters
         self.weights = weights
         self.strategy = strategy
+        self.offset = offset
+        self.max_results = max_results
 
     def run(self):
         try:
             self.progress.emit("Filtering missions...")
             routes = self.service.find_best_routes(
-                self.filters, self.weights, max_results=15, strategy=self.strategy
+                self.filters, self.weights,
+                max_results=self.max_results,
+                strategy=self.strategy,
+                offset=self.offset
             )
             self.finished.emit(routes)
         except Exception as e:
@@ -90,6 +129,10 @@ class RouteFinderTab(QWidget):
 
         self._worker: Optional[RouteFinderWorker] = None
         self._current_routes: List[CandidateRoute] = []
+        self._last_filters: Optional[RouteFinderFilters] = None
+        self._last_weights: Optional[OptimizationWeights] = None
+        self._last_strategy: Optional[SearchStrategy] = None
+        self._route_offset: int = 0
 
         self._setup_ui()
         self._load_initial_data()
@@ -142,7 +185,7 @@ class RouteFinderTab(QWidget):
         stops_layout.addWidget(QLabel("Max Stops:"))
         self.max_stops = QSpinBox()
         self.max_stops.setRange(1, 200)
-        self.max_stops.setValue(5)
+        self.max_stops.setValue(50)
         stops_layout.addWidget(self.max_stops)
         stops_layout.addStretch()
         basic_layout.addLayout(stops_layout)
@@ -376,6 +419,12 @@ class RouteFinderTab(QWidget):
         self.results_label.setProperty("class", "heading")
         results_header.addWidget(self.results_label)
         results_header.addStretch()
+
+        self.more_btn = QPushButton("More")
+        self.more_btn.clicked.connect(self._load_more_routes)
+        self.more_btn.hide()  # Hidden until results are shown
+        results_header.addWidget(self.more_btn)
+
         right_layout.addLayout(results_header)
 
         # Progress bar (hidden by default)
@@ -392,6 +441,7 @@ class RouteFinderTab(QWidget):
         ])
         self.results_tree.setAlternatingRowColors(True)
         self.results_tree.setRootIsDecorated(True)
+        self.results_tree.setSortingEnabled(True)
         self.results_tree.itemExpanded.connect(self._on_item_expanded)
 
         header = self.results_tree.header()
@@ -444,7 +494,7 @@ class RouteFinderTab(QWidget):
     def _clear_filters(self):
         """Reset filters to defaults."""
         self.start_location.clear()
-        self.max_stops.setValue(5)
+        self.max_stops.setValue(50)
         self.round_trip.setChecked(False)
         self._set_space_only()
         for cb in self.system_checks.values():
@@ -550,14 +600,25 @@ class RouteFinderTab(QWidget):
             self.status_label.setText("Error: Set at least one optimization weight > 0")
             return
 
+        # Save state for "More" functionality
+        self._last_filters = filters
+        self._last_weights = weights
+        self._last_strategy = strategy
+        self._route_offset = 0
+        self._current_routes = []  # Clear previous results
+
         # Start worker
         self.find_btn.setEnabled(False)
         self.find_btn.setText("Searching...")
+        self.more_btn.hide()
         self.progress_bar.show()
         self.results_tree.clear()
         self.results_label.setText("Searching for routes...")
 
-        self._worker = RouteFinderWorker(self.service, filters, weights, strategy)
+        self._worker = RouteFinderWorker(
+            self.service, filters, weights, strategy,
+            offset=0, max_results=10
+        )
         self._worker.finished.connect(self._on_routes_found)
         self._worker.error.connect(self._on_route_error)
         self._worker.progress.connect(self._on_progress)
@@ -573,37 +634,96 @@ class RouteFinderTab(QWidget):
         self.find_btn.setText("Find Routes")
         self.progress_bar.hide()
 
-        self._current_routes = routes
+        self._current_routes.extend(routes)
+        self._route_offset += len(routes)
 
-        if not routes:
+        if not self._current_routes:
             self.results_label.setText("No routes found")
             self.status_label.setText("No routes match your criteria. Try adjusting filters.")
+            self.more_btn.hide()
             return
 
-        self.results_label.setText(f"Found {len(routes)} route(s)")
-        self._display_routes(routes)
+        self.results_label.setText(f"Found {len(self._current_routes)} route(s)")
+        self._display_routes(self._current_routes)
 
-        total_missions = sum(len(r.missions) for r in routes)
-        self.status_label.setText(f"Found {len(routes)} routes from {total_missions} missions")
+        # Show "More" button if we got a full batch (more may be available)
+        if len(routes) >= 10:
+            self.more_btn.show()
+        else:
+            self.more_btn.hide()
+
+        total_missions = sum(len(r.missions) for r in self._current_routes)
+        self.status_label.setText(f"Found {len(self._current_routes)} routes from {total_missions} missions")
 
     def _on_route_error(self, error: str):
         """Handle route finding error."""
         self.find_btn.setEnabled(True)
         self.find_btn.setText("Find Routes")
         self.progress_bar.hide()
+        self.more_btn.hide()
         self.results_label.setText("Error finding routes")
         self.status_label.setText(f"Error: {error}")
+
+    def _load_more_routes(self):
+        """Load more routes using saved search state."""
+        if self._worker and self._worker.isRunning():
+            return  # Already running
+
+        if not self._last_filters or not self._last_weights:
+            return  # No previous search
+
+        self.find_btn.setEnabled(False)
+        self.more_btn.setEnabled(False)
+        self.more_btn.setText("Loading...")
+        self.progress_bar.show()
+        self.status_label.setText("Loading more routes...")
+
+        self._worker = RouteFinderWorker(
+            self.service, self._last_filters, self._last_weights, self._last_strategy,
+            offset=self._route_offset, max_results=10
+        )
+        self._worker.finished.connect(self._on_more_routes_found)
+        self._worker.error.connect(self._on_route_error)
+        self._worker.progress.connect(self._on_progress)
+        self._worker.start()
+
+    def _on_more_routes_found(self, routes: List[CandidateRoute]):
+        """Handle more routes loaded."""
+        self.find_btn.setEnabled(True)
+        self.more_btn.setEnabled(True)
+        self.more_btn.setText("More")
+        self.progress_bar.hide()
+
+        if not routes:
+            self.more_btn.hide()
+            self.status_label.setText("No more routes available")
+            return
+
+        self._current_routes.extend(routes)
+        self._route_offset += len(routes)
+
+        self.results_label.setText(f"Found {len(self._current_routes)} route(s)")
+        self._display_routes(self._current_routes)
+
+        # Hide "More" if we got less than a full batch
+        if len(routes) < 10:
+            self.more_btn.hide()
+
+        total_missions = sum(len(r.missions) for r in self._current_routes)
+        self.status_label.setText(f"Found {len(self._current_routes)} routes from {total_missions} missions")
 
     def _display_routes(self, routes: List[CandidateRoute]):
         """Display routes in the results tree."""
         self.results_tree.clear()
+        # Disable sorting while populating to avoid performance issues
+        self.results_tree.setSortingEnabled(False)
 
         for i, candidate in enumerate(routes, 1):
             metrics = candidate.metrics
             route = candidate.route
 
-            # Create top-level item
-            item = QTreeWidgetItem()
+            # Create top-level item with sortable support
+            item = SortableTreeWidgetItem()
             item.setText(0, f"Route #{i}")
             item.setText(1, f"{metrics.total_reward:,.0f} aUEC")
             item.setText(2, str(metrics.stop_count))
@@ -625,6 +745,9 @@ class RouteFinderTab(QWidget):
                     item.setBackground(col, QColor(76, 175, 80, 50))  # Green tint
 
             self.results_tree.addTopLevelItem(item)
+
+        # Re-enable sorting after populating
+        self.results_tree.setSortingEnabled(True)
 
     def _on_item_expanded(self, item: QTreeWidgetItem):
         """Handle item expansion - populate details."""
