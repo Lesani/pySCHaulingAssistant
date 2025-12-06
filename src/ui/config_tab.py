@@ -197,6 +197,27 @@ class ConfigTab(QWidget):
         )
         route_layout.addRow("Route Quality:", self.route_quality_combo)
 
+        # Thread count for route finder parallel processing
+        self.thread_count_spin = QSpinBox()
+        self.thread_count_spin.setRange(1, 16)
+        self.thread_count_spin.setValue(8)
+        self.thread_count_spin.setToolTip(
+            "Number of parallel processes for route optimization.\n"
+            "Higher values use more CPU but can speed up searches."
+        )
+        route_layout.addRow("Route Finder Threads:", self.thread_count_spin)
+
+        # Worker timeout for route finder
+        self.worker_timeout_spin = QSpinBox()
+        self.worker_timeout_spin.setRange(5, 120)
+        self.worker_timeout_spin.setValue(30)
+        self.worker_timeout_spin.setSuffix(" sec")
+        self.worker_timeout_spin.setToolTip(
+            "Timeout per worker task in seconds.\n"
+            "Increase if route finding times out on complex searches."
+        )
+        route_layout.addRow("Worker Timeout:", self.worker_timeout_spin)
+
         route_group.setLayout(route_layout)
         content_layout.addWidget(route_group)
 
@@ -408,6 +429,13 @@ class ConfigTab(QWidget):
 
         route_quality = self.config.get("route_planner", "route_quality", default="best")
         self.route_quality_combo.setCurrentText(route_quality.capitalize())
+
+        # Route finder parallel settings
+        thread_count = self.config.get("route_finder", "thread_count", default=8)
+        self.thread_count_spin.setValue(thread_count)
+
+        worker_timeout = self.config.get("route_finder", "worker_timeout", default=30)
+        self.worker_timeout_spin.setValue(worker_timeout)
 
         logger.debug("Configuration loaded")
 
@@ -636,6 +664,13 @@ class ConfigTab(QWidget):
 
             self.config.settings["route_planner"]["route_quality"] = self.route_quality_combo.currentText().lower()
 
+            # Route finder parallel settings
+            if "route_finder" not in self.config.settings:
+                self.config.settings["route_finder"] = {}
+
+            self.config.settings["route_finder"]["thread_count"] = self.thread_count_spin.value()
+            self.config.settings["route_finder"]["worker_timeout"] = self.worker_timeout_spin.value()
+
             # Save to file
             self.config.save()
 
@@ -686,6 +721,10 @@ class ConfigTab(QWidget):
 
             # Reset sync settings
             self.sync_url_edit.setText("")
+
+            # Reset route finder parallel settings
+            self.thread_count_spin.setValue(8)
+            self.worker_timeout_spin.setValue(30)
 
             logger.info("Settings reset to defaults")
 

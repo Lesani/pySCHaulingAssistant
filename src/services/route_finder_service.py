@@ -7,10 +7,15 @@ for finding optimal routes from the mission scan database.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, TYPE_CHECKING
 from itertools import combinations
+from concurrent.futures import ProcessPoolExecutor, as_completed, TimeoutError
+import os
 
 from src.domain.models import Mission, Objective, Route
+
+if TYPE_CHECKING:
+    from src.config import Config
 from src.services.vrp_solver import VRPSolver
 from src.services.location_type_classifier import LocationTypeClassifier, LocationType
 from src.location_hierarchy import LocationHierarchy
@@ -218,14 +223,19 @@ class RouteFinderService:
     Service for finding optimal routes from mission scans.
 
     Provides filtering, route generation, and optimization scoring.
+    Supports parallel processing for improved performance.
     """
+
+    # Minimum work items to justify parallel overhead
+    MIN_PARALLEL_ITEMS = 4
 
     def __init__(
         self,
         scan_db: MissionScanDB,
         location_classifier: LocationTypeClassifier = None,
         location_hierarchy: LocationHierarchy = None,
-        ship_manager: ShipManager = None
+        ship_manager: ShipManager = None,
+        config: "Config" = None
     ):
         """
         Initialize the route finder service.
@@ -235,11 +245,42 @@ class RouteFinderService:
             location_classifier: Location type classifier (created if None)
             location_hierarchy: Location hierarchy (created if None)
             ship_manager: Ship manager (created if None)
+            config: Configuration object for parallel settings
         """
         self.scan_db = scan_db
         self.classifier = location_classifier or LocationTypeClassifier()
         self.hierarchy = location_hierarchy or LocationHierarchy()
         self.ship_manager = ship_manager or ShipManager()
+
+        # Parallel processing settings
+        self._config = config
+        self._executor: Optional[ProcessPoolExecutor] = None
+        self._thread_count = self._get_thread_count()
+        self._worker_timeout = self._get_worker_timeout()
+
+    def _get_thread_count(self) -> int:
+        """Get configured thread count or default."""
+        if self._config:
+            return self._config.get_route_finder_thread_count()
+        return min(8, os.cpu_count() or 4)
+
+    def _get_worker_timeout(self) -> int:
+        """Get configured worker timeout or default."""
+        if self._config:
+            return self._config.get_route_finder_worker_timeout()
+        return 30
+
+    def _get_executor(self) -> ProcessPoolExecutor:
+        """Get or create the process pool executor."""
+        if self._executor is None:
+            self._executor = ProcessPoolExecutor(max_workers=self._thread_count)
+        return self._executor
+
+    def close(self) -> None:
+        """Shutdown the executor and release resources."""
+        if self._executor is not None:
+            self._executor.shutdown(wait=False)
+            self._executor = None
 
     def filter_missions(self, filters: RouteFinderFilters) -> List[Dict[str, Any]]:
         """
@@ -377,18 +418,18 @@ class RouteFinderService:
         ship_capacity = ship.cargo_capacity_scu if ship else 128
         goal = weights.get_dominant_goal()
 
-        # Small datasets: always use combinatorial (exhaustive)
+        # Small datasets: use parallel combinatorial (exhaustive)
         if len(scans) <= 8:
-            return self._build_routes_combinatorial(scans, filters, goal, ship_capacity)
+            return self._build_routes_combinatorial_parallel(scans, filters, goal, ship_capacity)
 
-        # Larger datasets: use selected strategy
+        # Larger datasets: use selected strategy with parallel processing
         if strategy == SearchStrategy.FAST:
-            return self._build_routes_greedy_affinity(scans, filters, weights, ship_capacity, max_routes)
+            return self._build_routes_greedy_affinity_parallel(scans, filters, weights, ship_capacity, max_routes)
         elif strategy == SearchStrategy.BETTER:
             return self._build_routes_beam_search(scans, filters, weights, ship_capacity)
         else:
-            # Fallback to greedy affinity
-            return self._build_routes_greedy_affinity(scans, filters, weights, ship_capacity, max_routes)
+            # Fallback to greedy affinity (parallel)
+            return self._build_routes_greedy_affinity_parallel(scans, filters, weights, ship_capacity, max_routes)
 
     def _build_routes_combinatorial(
         self,
@@ -418,6 +459,91 @@ class RouteFinderService:
                 candidate = self._try_build_route(mission_scans, filters, goal, ship_capacity)
                 if candidate:
                     candidates.append(candidate)
+
+        return candidates
+
+    def _build_routes_combinatorial_parallel(
+        self,
+        scans: List[Dict[str, Any]],
+        filters: RouteFinderFilters,
+        goal: OptimizationGoal,
+        ship_capacity: int
+    ) -> List[CandidateRoute]:
+        """
+        Parallel version of combinatorial search.
+
+        Distributes combinations across worker processes for parallel evaluation.
+        Falls back to sequential if parallel fails.
+        """
+        from src.services.route_finder_workers import batch_combinatorial_worker
+
+        # Generate all combinations
+        max_missions = min(len(scans), filters.max_stops)
+        all_combos = []
+        for size in range(1, max_missions + 1):
+            for combo in combinations(range(len(scans)), size):
+                all_combos.append(combo)
+
+        # Check if parallel is worthwhile
+        if len(all_combos) < self.MIN_PARALLEL_ITEMS:
+            return self._build_routes_combinatorial(scans, filters, goal, ship_capacity)
+
+        # Prepare serializable data
+        filters_dict = {
+            "max_stops": filters.max_stops,
+            "starting_location": filters.starting_location
+        }
+
+        # Batch combinations for workers (avoid too many small tasks)
+        batch_size = max(1, len(all_combos) // (self._thread_count * 2))
+        batches = [
+            all_combos[i:i + batch_size]
+            for i in range(0, len(all_combos), batch_size)
+        ]
+
+        # Create work items
+        work_items = [
+            (scans, batch, filters_dict, ship_capacity)
+            for batch in batches
+        ]
+
+        candidates = []
+        seen_combos: Set[frozenset] = set()
+
+        try:
+            executor = self._get_executor()
+            futures = {
+                executor.submit(batch_combinatorial_worker, item): idx
+                for idx, item in enumerate(work_items)
+            }
+
+            for future in as_completed(futures, timeout=self._worker_timeout * len(batches)):
+                try:
+                    results = future.result(timeout=self._worker_timeout)
+                    for result in results:
+                        combo_indices = result.get("combo_indices")
+                        if combo_indices:
+                            combo_key = frozenset(combo_indices)
+                            if combo_key in seen_combos:
+                                continue
+                            seen_combos.add(combo_key)
+
+                            # Rebuild candidate to get full RouteMetrics
+                            mission_scans = [scans[i] for i in combo_indices]
+                            candidate = self._try_build_route(
+                                mission_scans, filters, goal, ship_capacity
+                            )
+                            if candidate:
+                                candidates.append(candidate)
+
+                except TimeoutError:
+                    logger.debug("Combinatorial worker batch timed out")
+                except Exception as e:
+                    logger.debug(f"Combinatorial worker batch failed: {e}")
+
+        except Exception as e:
+            logger.warning(f"Parallel combinatorial search failed, falling back to sequential: {e}")
+            return self._build_routes_combinatorial(scans, filters, goal, ship_capacity)
 
         return candidates
 
@@ -579,6 +705,110 @@ class RouteFinderService:
                 break
 
         return best_candidate
+
+    def _build_routes_greedy_affinity_parallel(
+        self,
+        scans: List[Dict[str, Any]],
+        filters: RouteFinderFilters,
+        weights: OptimizationWeights,
+        ship_capacity: int,
+        max_routes: int = 10
+    ) -> List[CandidateRoute]:
+        """
+        Parallel version of greedy affinity search.
+
+        Dispatches starting points to worker processes for parallel execution.
+        Falls back to sequential if parallel fails.
+        """
+        from src.services.route_finder_workers import greedy_from_start_worker
+
+        goal = weights.get_dominant_goal()
+
+        # Score all scans with base score (by dominant goal)
+        scored_scans = []
+        for scan in scans:
+            base_score = self._get_scan_reward(scan)
+            if goal == OptimizationGoal.BEST_REWARD_PER_SCU:
+                scu = self._get_scan_scu(scan)
+                base_score = base_score / scu if scu > 0 else 0
+            scored_scans.append((scan, base_score))
+
+        # Sort by base score descending
+        scored_scans.sort(key=lambda x: x[1], reverse=True)
+
+        num_starts = min(len(scored_scans), max(20, max_routes * 2))
+
+        # Check if parallel is worthwhile
+        if num_starts < self.MIN_PARALLEL_ITEMS:
+            return self._build_routes_greedy_affinity(
+                scans, filters, weights, ship_capacity, max_routes
+            )
+
+        # Prepare serializable data for workers
+        filters_dict = {
+            "max_stops": filters.max_stops,
+            "starting_location": filters.starting_location
+        }
+        weights_dict = {
+            "max_reward": weights.max_reward,
+            "fewest_stops": weights.fewest_stops,
+            "min_distance": weights.min_distance,
+            "reward_per_stop": weights.reward_per_stop,
+            "reward_per_scu": weights.reward_per_scu
+        }
+
+        # Create work items
+        work_items = [
+            (scored_scans, start_idx, filters_dict, weights_dict, ship_capacity)
+            for start_idx in range(num_starts)
+        ]
+
+        candidates = []
+        seen_scan_sets: Set[frozenset] = set()
+
+        try:
+            executor = self._get_executor()
+            futures = {
+                executor.submit(greedy_from_start_worker, item): idx
+                for idx, item in enumerate(work_items)
+            }
+
+            for future in as_completed(futures, timeout=self._worker_timeout * num_starts):
+                try:
+                    result = future.result(timeout=self._worker_timeout)
+                    if result:
+                        # Reconstruct CandidateRoute from worker result
+                        scan_indices = result.get("scan_indices", [])
+                        mission_scans = [scored_scans[i][0] for i in scan_indices]
+
+                        # Check uniqueness
+                        scan_key = frozenset(scan_indices)
+                        if scan_key in seen_scan_sets:
+                            continue
+                        seen_scan_sets.add(scan_key)
+
+                        # Build the actual candidate (VRP already solved in worker)
+                        candidate = self._try_build_route(
+                            mission_scans, filters, goal, ship_capacity
+                        )
+                        if candidate:
+                            candidates.append(candidate)
+
+                        if len(candidates) >= max_routes:
+                            break
+
+                except TimeoutError:
+                    logger.debug("Greedy worker timed out")
+                except Exception as e:
+                    logger.debug(f"Greedy worker failed: {e}")
+
+        except Exception as e:
+            logger.warning(f"Parallel greedy search failed, falling back to sequential: {e}")
+            return self._build_routes_greedy_affinity(
+                scans, filters, weights, ship_capacity, max_routes
+            )
+
+        return candidates
 
     def _build_routes_beam_search(
         self,

@@ -178,3 +178,11 @@ class Config:
     def get_ship_capacity(self) -> float:
         """Get the configured ship capacity in SCU."""
         return self.get("route_planner", "ship_capacity", default=128.0)
+
+    def get_route_finder_thread_count(self) -> int:
+        """Get the number of threads for route finder parallel processing."""
+        return self.get("route_finder", "thread_count", default=8)
+
+    def get_route_finder_worker_timeout(self) -> int:
+        """Get the timeout in seconds for route finder worker tasks."""
+        return self.get("route_finder", "worker_timeout", default=30)

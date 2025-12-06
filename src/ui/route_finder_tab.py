@@ -124,7 +124,8 @@ class RouteFinderTab(QWidget):
         self.service = RouteFinderService(
             scan_db=scan_db,
             location_classifier=self.classifier,
-            ship_manager=self.ship_manager
+            ship_manager=self.ship_manager,
+            config=config
         )
 
         self._worker: Optional[RouteFinderWorker] = None
