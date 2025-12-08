@@ -4,7 +4,7 @@
 CREATE TABLE IF NOT EXISTS scans (
     id TEXT PRIMARY KEY,
     scan_timestamp TEXT NOT NULL,
-    scan_location TEXT,
+    scan_locations TEXT,  -- JSON array of location strings
     reward REAL DEFAULT 0,
     availability TEXT,
     rank TEXT,
@@ -16,9 +16,6 @@ CREATE TABLE IF NOT EXISTS scans (
 
 -- Index for efficient sync queries
 CREATE INDEX IF NOT EXISTS idx_scans_uploaded_at ON scans(uploaded_at);
-
--- Index for location filtering
-CREATE INDEX IF NOT EXISTS idx_scans_location ON scans(scan_location);
 
 -- Index for reward sorting
 CREATE INDEX IF NOT EXISTS idx_scans_reward ON scans(reward DESC);

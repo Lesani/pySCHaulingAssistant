@@ -170,9 +170,10 @@ class ScanDatabaseTab(QWidget):
     def add_scan_to_table(self, scan: dict):
         """Add a single scan to the table (called when a new scan is captured)."""
         # Update location filter if needed
-        scan_location = scan.get("scan_location")
-        if scan_location:
-            self._update_location_filter(scan_location)
+        scan_locations = scan.get("scan_locations", [])
+        for loc in scan_locations:
+            if loc:
+                self._update_location_filter(loc)
 
         # Update summary
         total = len(self.scan_db.scans)
@@ -184,10 +185,10 @@ class ScanDatabaseTab(QWidget):
         if filter_text == "All Locations":
             pass  # Always show
         elif filter_text == "No Location":
-            if scan_location is not None:
-                return  # Don't show
-        elif filter_text != scan_location:
-            return  # Don't show
+            if scan_locations:
+                return  # Don't show - has locations
+        elif filter_text not in scan_locations:
+            return  # Don't show - filter location not in scan's locations
 
         # Add row to table
         self._add_scan_row(scan)
@@ -226,11 +227,19 @@ class ScanDatabaseTab(QWidget):
             time_item.setBackground(unsynced_brush)
         self.table.setItem(row, 0, time_item)
 
-        # Location
-        location = scan.get("scan_location") or "(No Location)"
-        loc_item = QTableWidgetItem(location)
-        if not scan.get("scan_location"):
+        # Location - now supports multiple locations
+        locations = scan.get("scan_locations", [])
+        if not locations:
+            location_str = "(No Location)"
+            loc_item = QTableWidgetItem(location_str)
             loc_item.setForeground(QColor("#ff9800"))
+        elif len(locations) == 1:
+            location_str = locations[0]
+            loc_item = QTableWidgetItem(location_str)
+        else:
+            location_str = f"{locations[0]} (+{len(locations)-1} more)"
+            loc_item = QTableWidgetItem(location_str)
+            loc_item.setToolTip("\n".join(locations))
         if unsynced_brush:
             loc_item.setBackground(unsynced_brush)
         self.table.setItem(row, 1, loc_item)
@@ -307,14 +316,16 @@ class ScanDatabaseTab(QWidget):
         """Refresh the scans table based on current filter."""
         # Get filter
         filter_text = self.location_filter.currentText()
-        location_filter: Optional[str] = None
 
         if filter_text == "No Location":
-            location_filter = None
-            scans = [s for s in self.scan_db.get_scans() if s.get("scan_location") is None]
+            # Show scans with no locations
+            scans = [
+                s for s in self.scan_db.get_scans()
+                if not s.get("scan_locations", [])
+            ]
         elif filter_text != "All Locations":
-            location_filter = filter_text
-            scans = self.scan_db.get_scans(location=location_filter)
+            # Filter by specific location
+            scans = self.scan_db.get_scans(location=filter_text)
         else:
             scans = self.scan_db.get_scans()
 
@@ -402,7 +413,17 @@ class ScanDatabaseTab(QWidget):
         lines = []
         lines.append(f"Scan ID: {scan.get('id', 'N/A')}")
         lines.append(f"Scan Time: {scan.get('scan_timestamp', 'N/A')}")
-        lines.append(f"Location: {scan.get('scan_location') or '(No Location)'}")
+
+        # Show locations (supports multiple)
+        locations = scan.get("scan_locations", [])
+        if not locations:
+            lines.append("Location: (No Location)")
+        elif len(locations) == 1:
+            lines.append(f"Location: {locations[0]}")
+        else:
+            lines.append(f"Locations ({len(locations)}):")
+            for loc in locations:
+                lines.append(f"  - {loc}")
         lines.append("")
         rank = mission_data.get('rank', '')
         lines.append(f"Rank: {rank if rank else '(not detected)'}")
@@ -632,11 +653,16 @@ class ScanDatabaseTab(QWidget):
             for scan in downloaded:
                 # Check if we already have this scan
                 if not self.scan_db.get_scan(scan["id"]):
+                    # Handle both scan_locations (array) and legacy scan_location (string)
+                    locations = scan.get("scan_locations", [])
+                    if not locations and scan.get("scan_location"):
+                        locations = [scan.get("scan_location")]
+
                     # Add to local database (already synced since it came from server)
                     self.scan_db.scans.append({
                         "id": scan["id"],
                         "scan_timestamp": scan.get("scan_timestamp"),
-                        "scan_location": scan.get("scan_location"),
+                        "scan_locations": locations,
                         "mission_data": scan.get("mission_data", {}),
                         "synced_from": scan.get("uploaded_by", "unknown"),
                         "synced": True

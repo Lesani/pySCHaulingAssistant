@@ -208,7 +208,7 @@ export default {
  * GET /api/scans - Retrieve scans with optional filters
  * Query params:
  *   - since: ISO timestamp to get scans after
- *   - location: filter by scan location
+ *   - location: filter by scan location (matches any in the array)
  *   - limit: max results (default 100, max 1000)
  */
 async function getScans(request, env) {
@@ -226,8 +226,12 @@ async function getScans(request, env) {
   }
 
   if (location) {
-    query += ' AND scan_location = ?';
-    params.push(location);
+    // Use JSON functions to check if location is in the array
+    query += ' AND (scan_locations LIKE ? OR scan_locations LIKE ? OR scan_locations LIKE ?)';
+    // Match: ["location", or ,"location", or ,"location"]
+    params.push(`["%${location}%`);
+    params.push(`%,"${location}",%`);
+    params.push(`%,"${location}"]`);
   }
 
   query += ' ORDER BY uploaded_at DESC LIMIT ?';
@@ -236,9 +240,10 @@ async function getScans(request, env) {
   const stmt = env.DB.prepare(query);
   const { results } = await stmt.bind(...params).all();
 
-  // Parse objectives JSON for each result
+  // Parse JSON fields for each result
   const scans = results.map(row => ({
     ...row,
+    scan_locations: JSON.parse(row.scan_locations || '[]'),
     objectives: JSON.parse(row.objectives || '[]'),
   }));
 
@@ -247,6 +252,22 @@ async function getScans(request, env) {
     count: scans.length,
     scans,
   });
+}
+
+/**
+ * Helper to normalize scan locations to array format
+ * Accepts either scan_locations (array) or scan_location (string) for backward compat
+ */
+function normalizeScanLocations(scan) {
+  // Prefer scan_locations array
+  if (Array.isArray(scan.scan_locations)) {
+    return scan.scan_locations;
+  }
+  // Fallback to single scan_location
+  if (scan.scan_location) {
+    return [scan.scan_location];
+  }
+  return [];
 }
 
 /**
@@ -285,16 +306,19 @@ async function uploadScans(request, env, user) {
         continue;
       }
 
+      // Normalize locations to array
+      const locations = normalizeScanLocations(scan);
+
       // Insert new scan
       await env.DB.prepare(`
         INSERT INTO scans (
-          id, scan_timestamp, scan_location, reward, availability,
+          id, scan_timestamp, scan_locations, reward, availability,
           rank, contracted_by, objectives, uploaded_by, uploaded_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
         scan.id,
         scan.scan_timestamp,
-        scan.scan_location || null,
+        JSON.stringify(locations),
         scan.mission_data?.reward || scan.reward || 0,
         scan.mission_data?.availability || scan.availability || '',
         scan.mission_data?.rank || scan.rank || '',
@@ -340,16 +364,19 @@ async function syncScans(request, env, user) {
   for (const scan of localScans) {
     try {
       const existing = await env.DB.prepare(
-        'SELECT id, scan_location FROM scans WHERE id = ?'
+        'SELECT id, scan_locations FROM scans WHERE id = ?'
       ).bind(scan.id).first();
 
+      // Normalize locations to array
+      const newLocations = normalizeScanLocations(scan);
+      const newLocationsJson = JSON.stringify(newLocations);
+
       if (existing) {
-        // Check if scan_location has changed and needs updating
-        const newLocation = scan.scan_location || null;
-        if (existing.scan_location !== newLocation) {
+        // Check if scan_locations has changed and needs updating
+        if (existing.scan_locations !== newLocationsJson) {
           await env.DB.prepare(
-            'UPDATE scans SET scan_location = ? WHERE id = ?'
-          ).bind(newLocation, scan.id).run();
+            'UPDATE scans SET scan_locations = ? WHERE id = ?'
+          ).bind(newLocationsJson, scan.id).run();
           updated++;
         } else {
           duplicates++;
@@ -359,13 +386,13 @@ async function syncScans(request, env, user) {
 
       await env.DB.prepare(`
         INSERT INTO scans (
-          id, scan_timestamp, scan_location, reward, availability,
+          id, scan_timestamp, scan_locations, reward, availability,
           rank, contracted_by, objectives, uploaded_by, uploaded_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
         scan.id,
         scan.scan_timestamp,
-        scan.scan_location || null,
+        newLocationsJson,
         scan.mission_data?.reward || scan.reward || 0,
         scan.mission_data?.availability || scan.availability || '',
         scan.mission_data?.rank || scan.rank || '',
@@ -396,7 +423,7 @@ async function syncScans(request, env, user) {
   const newScans = results.map(row => ({
     id: row.id,
     scan_timestamp: row.scan_timestamp,
-    scan_location: row.scan_location,
+    scan_locations: JSON.parse(row.scan_locations || '[]'),
     mission_data: {
       reward: row.reward,
       availability: row.availability,
@@ -426,19 +453,17 @@ async function getStats(env) {
     'SELECT COUNT(*) as total FROM scans'
   ).first();
 
-  const locationResult = await env.DB.prepare(`
-    SELECT scan_location, COUNT(*) as count
-    FROM scans
-    WHERE scan_location IS NOT NULL
-    GROUP BY scan_location
-    ORDER BY count DESC
-    LIMIT 20
-  `).all();
-
   const recentResult = await env.DB.prepare(`
     SELECT COUNT(*) as count
     FROM scans
     WHERE uploaded_at > datetime('now', '-24 hours')
+  `).first();
+
+  // Count scans with/without locations
+  const withLocationsResult = await env.DB.prepare(`
+    SELECT COUNT(*) as count
+    FROM scans
+    WHERE scan_locations IS NOT NULL AND scan_locations != '[]'
   `).first();
 
   return jsonResponse({
@@ -446,7 +471,7 @@ async function getStats(env) {
     stats: {
       total_scans: totalResult?.total || 0,
       scans_last_24h: recentResult?.count || 0,
-      top_locations: locationResult?.results || [],
+      scans_with_locations: withLocationsResult?.count || 0,
     },
   });
 }
