@@ -17,7 +17,7 @@ from src.mission_manager import MissionManager
 from src.mission_scan_db import MissionScanDB
 from src.location_autocomplete import LocationMatcher
 from src.cargo_autocomplete import CargoMatcher
-from src.global_hotkeys import GlobalHotkeyManager
+from src.global_hotkeys import GlobalHotkeyManager, is_app_focused
 from src.discord_auth import DiscordAuth
 from src.sound_service import init_sound_service
 from src.logger import get_logger
@@ -419,7 +419,12 @@ class MainWindow(QMainWindow):
 
     def _hotkey_capture(self):
         """Handle capture hotkey press."""
-        logger.debug("Capture hotkey triggered")
+        # Only trigger when app does NOT have focus (i.e., game is focused)
+        if is_app_focused():
+            logger.debug("Capture hotkey ignored - app has focus")
+            return
+
+        logger.info("Capture hotkey triggered - callback executing")
         try:
             # Switch to capture tab if not already there
             self.tab_widget.setCurrentIndex(0)
@@ -431,7 +436,12 @@ class MainWindow(QMainWindow):
 
     def _hotkey_save(self):
         """Handle save hotkey press."""
-        logger.debug("Save hotkey triggered")
+        # Only trigger when app does NOT have focus (i.e., game is focused)
+        if is_app_focused():
+            logger.debug("Save hotkey ignored - app has focus")
+            return
+
+        logger.info("Save hotkey triggered - callback executing")
         try:
             # Use QTimer.singleShot for thread-safe GUI updates from hotkey thread
             QTimer.singleShot(0, self.capture_tab.validation_form._save_mission)

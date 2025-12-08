@@ -13,6 +13,39 @@ from src.logger import get_logger
 logger = get_logger()
 
 
+def is_app_focused() -> bool:
+    """
+    Check if our application window currently has focus.
+
+    Returns:
+        True if our app has focus, False if another app (like the game) has focus.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+        import os
+
+        user32 = ctypes.windll.user32
+
+        # Get the foreground window
+        foreground_hwnd = user32.GetForegroundWindow()
+        if not foreground_hwnd:
+            return False
+
+        # Get the process ID of the foreground window
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(foreground_hwnd, ctypes.byref(pid))
+
+        # Compare with our own process ID
+        our_pid = os.getpid()
+        return pid.value == our_pid
+
+    except Exception as e:
+        logger.warning(f"Could not check app focus: {e}")
+        # If we can't determine focus, assume we have it (safer)
+        return True
+
+
 class HotkeyConfig:
     """Configuration for a single hotkey."""
 
@@ -84,11 +117,11 @@ class HotkeyConfig:
             'num_7': 'num 7',
             'num_8': 'num 8',
             'num_9': 'num 9',
-            'num_minus': 'num -',
-            'num_plus': 'num +',
-            'num_multiply': 'num *',
-            'num_divide': 'num /',
-            'num_decimal': 'num .',
+            'num_minus': 'num minus',
+            'num_plus': 'num plus',
+            'num_multiply': 'num multiply',
+            'num_divide': 'num divide',
+            'num_decimal': 'num decimal',
             'num_enter': 'num enter',
         }
 
@@ -149,6 +182,7 @@ class GlobalHotkeyManager:
     def _register_hook(self, name: str, hotkey: HotkeyConfig) -> None:
         """Register a single hotkey hook with the keyboard library."""
         try:
+            logger.info(f"Registering hotkey '{name}': modifiers={hotkey.modifiers}, key={hotkey.key}, string='{hotkey.hotkey_string}'")
             # Use suppress=False to allow the key event to pass through to other apps
             hook = keyboard.add_hotkey(
                 hotkey.hotkey_string,
@@ -157,7 +191,7 @@ class GlobalHotkeyManager:
                 trigger_on_release=False
             )
             self._registered_hooks[name] = hook
-            logger.debug(f"Hook registered for '{name}': {hotkey.hotkey_string}")
+            logger.info(f"Hook registered successfully for '{name}': {hotkey.hotkey_string}")
         except Exception as e:
             logger.error(f"Failed to register hotkey '{name}' ({hotkey.hotkey_string}): {e}")
 
