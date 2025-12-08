@@ -23,13 +23,12 @@ from src.location_autocomplete import LocationMatcher
 from src.cargo_autocomplete import CargoMatcher
 from src.mission_scan_db import MissionScanDB
 from src.image_processor import ImageProcessor
+from src.special_locations import (
+    NO_LOCATION_TEXT, SPECIAL_LOCATIONS, is_special_location
+)
 from src.logger import get_logger
 
 logger = get_logger()
-
-# Constants
-NO_LOCATION_TEXT = "-- No Location --"
-INTERSTELLAR_TEXT = "INTERSTELLAR"
 
 
 class ImageSelectionWidget(QLabel):
@@ -315,7 +314,8 @@ class ScreenshotParserTab(QWidget):
         self.location_combo.setMinimumWidth(250)
         self.location_combo.addItem("-- Select Location --")
         self.location_combo.addItem(NO_LOCATION_TEXT)
-        self.location_combo.addItem(INTERSTELLAR_TEXT)
+        for loc in SPECIAL_LOCATIONS:
+            self.location_combo.addItem(loc)
         # Add all scannable locations
         for loc in self.location_matcher.get_scannable_locations():
             self.location_combo.addItem(loc)
@@ -885,9 +885,9 @@ class ScreenshotParserTab(QWidget):
             self._scan_location = None
         elif selected_text == NO_LOCATION_TEXT:
             self._scan_location = None
-        elif selected_text == INTERSTELLAR_TEXT:
-            self._scan_location = "INTERSTELLAR"
-            logger.info("Scan location set to: INTERSTELLAR")
+        elif is_special_location(selected_text):
+            self._scan_location = selected_text
+            logger.info(f"Scan location set to: {selected_text}")
         else:
             self._scan_location = selected_text
             logger.info(f"Scan location set to: {selected_text}")
@@ -896,10 +896,11 @@ class ScreenshotParserTab(QWidget):
         """Get the current scan location or None."""
         if self.location_combo.currentIndex() == 0:
             return None
-        if self.location_combo.currentText() == NO_LOCATION_TEXT:
+        selected = self.location_combo.currentText()
+        if selected == NO_LOCATION_TEXT:
             return None
-        if self.location_combo.currentText() == INTERSTELLAR_TEXT:
-            return "INTERSTELLAR"
+        if is_special_location(selected):
+            return selected
         return self._scan_location
 
     def _parse_selection(self):

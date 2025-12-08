@@ -24,14 +24,15 @@ from src.cargo_autocomplete import CargoMatcher
 from src.ui.region_selector import RegionSelector
 from src.ui.validation_form import ValidationForm
 from src.sound_service import get_sound_service
+from src.special_locations import (
+    NO_LOCATION_TEXT, SPECIAL_LOCATIONS, is_special_location
+)
 from src.logger import get_logger
 
 logger = get_logger()
 
 # Constants
 LOCATION_TIMEOUT_MINUTES = 10
-NO_LOCATION_TEXT = "-- No Location --"
-INTERSTELLAR_TEXT = "INTERSTELLAR"
 
 
 class CaptureTab(QWidget):
@@ -88,7 +89,8 @@ class CaptureTab(QWidget):
         self.location_combo.setMinimumWidth(200)
         self.location_combo.addItem("-- Select Location --")
         self.location_combo.addItem(NO_LOCATION_TEXT)
-        self.location_combo.addItem(INTERSTELLAR_TEXT)
+        for loc in SPECIAL_LOCATIONS:
+            self.location_combo.addItem(loc)
         for loc in self.location_matcher.get_scannable_locations():
             self.location_combo.addItem(loc)
         self.location_combo.currentIndexChanged.connect(self._on_location_changed)
@@ -292,9 +294,10 @@ class CaptureTab(QWidget):
             self._show_no_location_warning()
             return
 
-        # Check if location is stale (but not if "No Location" or "INTERSTELLAR" is selected)
+        # Check if location is stale (but not if "No Location" or special location is selected)
         if self._is_location_set() and self._is_location_stale():
-            if self.location_combo.currentText() not in (NO_LOCATION_TEXT, INTERSTELLAR_TEXT):
+            selected = self.location_combo.currentText()
+            if selected != NO_LOCATION_TEXT and not is_special_location(selected):
                 self._update_location_warning(True)
                 self.status_message.emit("Location is stale - select new location or click 'Parse Anyway'", 0)
                 return
@@ -526,9 +529,9 @@ class CaptureTab(QWidget):
             self.location_selected_time = None
             self.location_time_label.setText("")
             self._update_location_warning(False)
-        elif selected_text in (NO_LOCATION_TEXT, INTERSTELLAR_TEXT):
-            # "No Location" or "INTERSTELLAR" option - no timeout warning needed
-            self.scan_location = None
+        elif selected_text == NO_LOCATION_TEXT or is_special_location(selected_text):
+            # "No Location" or special location - no timeout warning needed
+            self.scan_location = selected_text if is_special_location(selected_text) else None
             self.location_selected_time = None
             self.location_time_label.setText("(no location tracking)")
             self._update_location_warning(False)
@@ -544,8 +547,9 @@ class CaptureTab(QWidget):
         if not self._is_location_set():
             return
 
-        # Skip timeout check if "No Location" or "INTERSTELLAR" is selected
-        if self.location_combo.currentText() in (NO_LOCATION_TEXT, INTERSTELLAR_TEXT):
+        # Skip timeout check if "No Location" or special location is selected
+        selected = self.location_combo.currentText()
+        if selected == NO_LOCATION_TEXT or is_special_location(selected):
             return
 
         self._update_location_time_display()
@@ -621,10 +625,11 @@ class CaptureTab(QWidget):
         """Get the current scan location or None."""
         if self.location_combo.currentIndex() == 0:
             return None
-        if self.location_combo.currentText() == NO_LOCATION_TEXT:
+        selected = self.location_combo.currentText()
+        if selected == NO_LOCATION_TEXT:
             return None
-        if self.location_combo.currentText() == INTERSTELLAR_TEXT:
-            return "INTERSTELLAR"
+        if is_special_location(selected):
+            return selected
         return self.scan_location
 
     def _show_no_location_warning(self):

@@ -57,10 +57,43 @@ class HotkeyConfig:
             'page_down': 'page down',
             'return': 'enter',
             'esc': 'escape',
+            'scroll_lock': 'scroll lock',
+            'num_lock': 'num lock',
+            'caps_lock': 'caps lock',
+            'bracket_left': '[',
+            'bracket_right': ']',
+            'backslash': '\\',
+            'semicolon': ';',
+            'apostrophe': "'",
+            'comma': ',',
+            'period': '.',
+            'slash': '/',
+            'grave': '`',
+            'equals': '=',
+            'minus': '-',
+            'plus': '+',
+            'asterisk': '*',
+            # Numpad keys
+            'num_0': 'num 0',
+            'num_1': 'num 1',
+            'num_2': 'num 2',
+            'num_3': 'num 3',
+            'num_4': 'num 4',
+            'num_5': 'num 5',
+            'num_6': 'num 6',
+            'num_7': 'num 7',
+            'num_8': 'num 8',
+            'num_9': 'num 9',
+            'num_minus': 'num -',
+            'num_plus': 'num +',
+            'num_multiply': 'num *',
+            'num_divide': 'num /',
+            'num_decimal': 'num .',
+            'num_enter': 'num enter',
         }
 
         key_lower = self.key.lower()
-        parts.append(key_map.get(key_lower, key_lower))
+        parts.append(key_map.get(key_lower, key_lower.replace('_', ' ')))
 
         return '+'.join(parts)
 

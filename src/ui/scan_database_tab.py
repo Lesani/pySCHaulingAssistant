@@ -19,6 +19,7 @@ from typing import Optional, TYPE_CHECKING, List
 from src.mission_scan_db import MissionScanDB
 from src.sync_service import SyncService
 from src.config import Config
+from src.special_locations import SPECIAL_LOCATIONS
 from src.logger import get_logger
 from src.location_autocomplete import LocationMatcher
 
@@ -451,7 +452,7 @@ class ScanDatabaseTab(QWidget):
             return
 
         # Get available locations
-        locations = ["INTERSTELLAR"] + self.location_matcher.get_scannable_locations()
+        locations = SPECIAL_LOCATIONS + self.location_matcher.get_scannable_locations()
 
         # Create dialog with line edit and autocomplete
         dialog = QDialog(self)

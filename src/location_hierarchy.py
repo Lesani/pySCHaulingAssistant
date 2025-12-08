@@ -10,6 +10,10 @@ from enum import IntEnum
 import re
 
 from src.logger import get_logger
+from src.special_locations import (
+    is_special_location, get_system_from_special_location,
+    is_interstellar_location, is_jump_point
+)
 
 logger = get_logger()
 
@@ -189,6 +193,10 @@ class LocationHierarchy:
         if not location:
             return None
 
+        # Check for special locations (interstellar, jump points)
+        if is_special_location(location):
+            return get_system_from_special_location(location)
+
         # Parse the location
         _, body, parent = self.parse_location(location)
 
@@ -274,6 +282,19 @@ class LocationHierarchy:
         # Same location
         if loc1 == loc2:
             return ProximityWeight.SAME_STATION
+
+        # Handle special locations (interstellar, jump points)
+        loc1_is_special = is_special_location(loc1)
+        loc2_is_special = is_special_location(loc2)
+
+        if loc1_is_special or loc2_is_special:
+            # Get systems for special locations
+            sys1 = get_system_from_special_location(loc1) if loc1_is_special else self.get_system_for_location(loc1)
+            sys2 = get_system_from_special_location(loc2) if loc2_is_special else self.get_system_for_location(loc2)
+
+            if sys1 and sys2 and sys1 == sys2:
+                return ProximityWeight.SAME_SYSTEM
+            return ProximityWeight.DIFFERENT_SYSTEM
 
         # Parse both locations
         station1, body1, parent1 = self.parse_location(loc1)

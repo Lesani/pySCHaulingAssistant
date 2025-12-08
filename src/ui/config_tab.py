@@ -16,6 +16,7 @@ from typing import Optional, TYPE_CHECKING
 from src.config import Config
 from src.sound_service import get_sound_service
 from src.logger import get_logger
+from src.ui.hotkey_recorder import HotkeyRecorder
 
 if TYPE_CHECKING:
     from src.discord_auth import DiscordAuth
@@ -243,38 +244,14 @@ class ConfigTab(QWidget):
         hotkeys_layout.addRow(info_label)
 
         # Capture hotkey
-        capture_hotkey_layout = QHBoxLayout()
-        self.capture_modifier_combo = QComboBox()
-        self.capture_modifier_combo.addItems(["Shift", "Ctrl", "Alt", "Shift+Ctrl", "Shift+Alt", "Ctrl+Alt"])
-        self.capture_modifier_combo.setMinimumWidth(100)
-        capture_hotkey_layout.addWidget(self.capture_modifier_combo)
-        capture_hotkey_layout.addWidget(QLabel("+"))
-        self.capture_key_combo = QComboBox()
-        self.capture_key_combo.addItems([
-            "Print Screen", "Enter", "Space", "F1", "F2", "F3", "F4",
-            "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"
-        ])
-        self.capture_key_combo.setMinimumWidth(120)
-        capture_hotkey_layout.addWidget(self.capture_key_combo)
-        capture_hotkey_layout.addStretch()
-        hotkeys_layout.addRow("Capture & Extract:", capture_hotkey_layout)
+        self.capture_hotkey_recorder = HotkeyRecorder()
+        self.capture_hotkey_recorder.setToolTip("Click and press the desired key combination")
+        hotkeys_layout.addRow("Capture && Extract:", self.capture_hotkey_recorder)
 
         # Save hotkey
-        save_hotkey_layout = QHBoxLayout()
-        self.save_modifier_combo = QComboBox()
-        self.save_modifier_combo.addItems(["Shift", "Ctrl", "Alt", "Shift+Ctrl", "Shift+Alt", "Ctrl+Alt"])
-        self.save_modifier_combo.setMinimumWidth(100)
-        save_hotkey_layout.addWidget(self.save_modifier_combo)
-        save_hotkey_layout.addWidget(QLabel("+"))
-        self.save_key_combo = QComboBox()
-        self.save_key_combo.addItems([
-            "Enter", "Space", "Print Screen", "F1", "F2", "F3", "F4",
-            "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"
-        ])
-        self.save_key_combo.setMinimumWidth(120)
-        save_hotkey_layout.addWidget(self.save_key_combo)
-        save_hotkey_layout.addStretch()
-        hotkeys_layout.addRow("Add to List:", save_hotkey_layout)
+        self.save_hotkey_recorder = HotkeyRecorder()
+        self.save_hotkey_recorder.setToolTip("Click and press the desired key combination")
+        hotkeys_layout.addRow("Add to List:", self.save_hotkey_recorder)
 
         hotkeys_group.setLayout(hotkeys_layout)
         content_layout.addWidget(hotkeys_group)
@@ -405,14 +382,12 @@ class ConfigTab(QWidget):
         # Capture hotkey
         capture_modifiers = self.config.get("hotkeys", "capture", "modifiers", default=["shift"])
         capture_key = self.config.get("hotkeys", "capture", "key", default="print_screen")
-        self._set_hotkey_combo(self.capture_modifier_combo, capture_modifiers)
-        self._set_key_combo(self.capture_key_combo, capture_key)
+        self.capture_hotkey_recorder.set_hotkey(capture_modifiers, capture_key)
 
         # Save hotkey
         save_modifiers = self.config.get("hotkeys", "save", "modifiers", default=["shift"])
         save_key = self.config.get("hotkeys", "save", "key", default="enter")
-        self._set_hotkey_combo(self.save_modifier_combo, save_modifiers)
-        self._set_key_combo(self.save_key_combo, save_key)
+        self.save_hotkey_recorder.set_hotkey(save_modifiers, save_key)
 
         # Update model list based on provider (use display text from combo)
         self._on_provider_changed(self.provider_combo.currentText())
@@ -438,68 +413,6 @@ class ConfigTab(QWidget):
         self.worker_timeout_spin.setValue(worker_timeout)
 
         logger.debug("Configuration loaded")
-
-    def _set_hotkey_combo(self, combo: QComboBox, modifiers: list):
-        """Set the modifier combo box based on a list of modifiers."""
-        # Convert list to display string
-        if not modifiers:
-            combo.setCurrentText("Shift")
-            return
-
-        # Sort for consistent display
-        sorted_mods = sorted([m.capitalize() for m in modifiers])
-        display_text = "+".join(sorted_mods)
-
-        # Try to find exact match
-        for i in range(combo.count()):
-            if combo.itemText(i) == display_text:
-                combo.setCurrentIndex(i)
-                return
-
-        # Default to first item
-        combo.setCurrentIndex(0)
-
-    def _set_key_combo(self, combo: QComboBox, key: str):
-        """Set the key combo box based on a key string."""
-        # Convert internal key name to display name
-        key_map = {
-            "print_screen": "Print Screen",
-            "enter": "Enter",
-            "space": "Space",
-            "f1": "F1", "f2": "F2", "f3": "F3", "f4": "F4",
-            "f5": "F5", "f6": "F6", "f7": "F7", "f8": "F8",
-            "f9": "F9", "f10": "F10", "f11": "F11", "f12": "F12"
-        }
-
-        display_key = key_map.get(key.lower(), key.capitalize())
-
-        # Try to find match
-        for i in range(combo.count()):
-            if combo.itemText(i) == display_key:
-                combo.setCurrentIndex(i)
-                return
-
-        # Default to first item
-        combo.setCurrentIndex(0)
-
-    def _get_modifiers_list(self, display_text: str) -> list:
-        """Convert display text to list of modifier keys."""
-        # Split by + and convert to lowercase
-        return [mod.strip().lower() for mod in display_text.split("+")]
-
-    def _get_key_value(self, display_text: str) -> str:
-        """Convert display text to internal key value."""
-        # Convert display name to internal key name
-        key_map = {
-            "Print Screen": "print_screen",
-            "Enter": "enter",
-            "Space": "space",
-            "F1": "f1", "F2": "f2", "F3": "f3", "F4": "f4",
-            "F5": "f5", "F6": "f6", "F7": "f7", "F8": "f8",
-            "F9": "f9", "F10": "f10", "F11": "f11", "F12": "f12"
-        }
-
-        return key_map.get(display_text, display_text.lower())
 
     def _on_ship_changed(self, ship_name: str):
         """Handle ship selection change."""
@@ -615,8 +528,7 @@ class ConfigTab(QWidget):
             self.config.settings["hotkeys"]["enabled"] = self.hotkeys_enabled_check.isChecked()
 
             # Capture hotkey
-            capture_modifiers = self._get_modifiers_list(self.capture_modifier_combo.currentText())
-            capture_key = self._get_key_value(self.capture_key_combo.currentText())
+            capture_modifiers, capture_key = self.capture_hotkey_recorder.get_hotkey()
 
             if "capture" not in self.config.settings["hotkeys"]:
                 self.config.settings["hotkeys"]["capture"] = {}
@@ -626,8 +538,7 @@ class ConfigTab(QWidget):
             self.config.settings["hotkeys"]["capture"]["description"] = "Capture & extract mission from screen"
 
             # Save hotkey
-            save_modifiers = self._get_modifiers_list(self.save_modifier_combo.currentText())
-            save_key = self._get_key_value(self.save_key_combo.currentText())
+            save_modifiers, save_key = self.save_hotkey_recorder.get_hotkey()
 
             if "save" not in self.config.settings["hotkeys"]:
                 self.config.settings["hotkeys"]["save"] = {}
@@ -711,10 +622,8 @@ class ConfigTab(QWidget):
 
             # Reset hotkey settings
             self.hotkeys_enabled_check.setChecked(True)
-            self.capture_modifier_combo.setCurrentText("Shift")
-            self.capture_key_combo.setCurrentText("Print Screen")
-            self.save_modifier_combo.setCurrentText("Shift")
-            self.save_key_combo.setCurrentText("Enter")
+            self.capture_hotkey_recorder.set_hotkey(['shift'], 'print_screen')
+            self.save_hotkey_recorder.set_hotkey(['shift'], 'enter')
 
             # Reset sound settings
             self.sounds_enabled_check.setChecked(True)
