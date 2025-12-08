@@ -281,10 +281,15 @@ class RoutePlannerTab(QWidget):
         # Show optimizing status
         self.status_label.setText("Optimizing...")
 
+        # Calculate available capacity (ship capacity minus cargo already in hold)
+        cargo_in_hold = self._get_cargo_in_hold()
+        cargo_in_hold_scu = sum(obj.get("scu_amount", 0) for obj in cargo_in_hold)
+        available_capacity = max(0, self.selected_ship_capacity - cargo_in_hold_scu)
+
         # Start background optimization
         worker = RouteOptimizerWorker(
             missions=missions,
-            ship_capacity=self.selected_ship_capacity,
+            ship_capacity=available_capacity,
             quality=self.route_quality
         )
 
