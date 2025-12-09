@@ -594,11 +594,19 @@ class ScreenshotParserTab(QWidget):
 
     def _batch_drop(self, event):
         """Handle drop event for batch file list."""
+        import os
+
         if event.mimeData().hasUrls():
             valid_extensions = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
             for url in event.mimeData().urls():
                 path = url.toLocalFile()
-                if path.lower().endswith(valid_extensions):
+                if os.path.isdir(path):
+                    # Recursively add all image files from folder
+                    for root, dirs, files in os.walk(path):
+                        for file in files:
+                            if file.lower().endswith(valid_extensions):
+                                self._add_file_to_batch_list(os.path.join(root, file))
+                elif path.lower().endswith(valid_extensions):
                     self._add_file_to_batch_list(path)
             event.acceptProposedAction()
         else:
