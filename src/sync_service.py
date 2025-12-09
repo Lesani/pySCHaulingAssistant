@@ -239,6 +239,51 @@ class SyncService:
             logger.error(f"Download failed: {e}")
             return {"success": False, "error": f"Download failed: {str(e)}"}
 
+    def deduplicate_remote(self) -> dict:
+        """Trigger server-side database deduplication.
+
+        Merges duplicate missions (same reward/contractor/objectives) across all users,
+        combining their scan locations.
+
+        Returns:
+            dict with 'success', 'duplicates_removed', 'message' or 'error'
+        """
+        api_url = self._get_api_url()
+        if not api_url:
+            return {"success": False, "error": "Sync API URL not configured"}
+
+        if not self.is_authenticated():
+            return {"success": False, "error": "Authentication required. Please login with Discord."}
+
+        try:
+            headers = self._get_auth_headers()
+
+            response = requests.post(
+                f"{api_url}/api/admin/deduplicate",
+                headers=headers,
+                timeout=60
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(
+                    f"Server deduplication complete: {data.get('duplicates_removed', 0)} duplicates removed"
+                )
+                return data
+            elif response.status_code == 401:
+                return {"success": False, "error": "Authentication failed. Please login with Discord."}
+            else:
+                return {
+                    "success": False,
+                    "error": f"Server returned status {response.status_code}: {response.text}"
+                }
+
+        except requests.exceptions.Timeout:
+            return {"success": False, "error": "Deduplication request timed out"}
+        except Exception as e:
+            logger.error(f"Deduplication failed: {e}")
+            return {"success": False, "error": f"Deduplication failed: {str(e)}"}
+
     def sync(self, local_scans: list) -> dict:
         """Perform two-way sync.
 

@@ -186,3 +186,7 @@ class Config:
     def get_route_finder_worker_timeout(self) -> int:
         """Get the timeout in seconds for route finder worker tasks."""
         return self.get("route_finder", "worker_timeout", default=30)
+
+    def get_batch_concurrent_requests(self) -> int:
+        """Get the number of concurrent API requests for batch screenshot processing."""
+        return self.get("api", "batch_concurrent_requests", default=5)

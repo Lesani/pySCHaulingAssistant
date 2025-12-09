@@ -11,11 +11,15 @@ from PyQt6.QtWidgets import (
     QComboBox, QProgressDialog, QTabWidget, QListWidget, QListWidgetItem,
     QAbstractItemView, QSizePolicy
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QRect, QPoint, QUrl
+from PyQt6.QtCore import Qt, pyqtSignal, QRect, QPoint, QUrl, QThread
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QBrush, QKeySequence, QShortcut
 
 from PIL import Image
 import io
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from typing import Optional, List, Tuple
 
 from src.config import Config
 from src.api_client import APIClient
@@ -273,6 +277,186 @@ class ImageSelectionWidget(QLabel):
             self._selection_rect = None
 
 
+@dataclass
+class BatchItemResult:
+    """Result of processing a single batch item."""
+    index: int
+    file_path: str
+    success: bool
+    scan_id: Optional[str] = None
+    scan_record: Optional[dict] = None
+    error: Optional[str] = None
+
+
+class BatchProcessingWorker(QThread):
+    """Worker thread for batch screenshot processing with concurrency."""
+
+    # Signals for thread-safe UI updates
+    progress = pyqtSignal(int, int, str)  # (current, total, file_path)
+    item_completed = pyqtSignal(int, bool, str)  # (index, success, error_or_scan_id)
+    scan_added = pyqtSignal(dict)  # scan_record for database updates
+    finished_processing = pyqtSignal(int, int, list)  # (success_count, error_count, errors)
+
+    def __init__(
+        self,
+        file_items: List[Tuple[int, str]],  # (index, file_path)
+        selection: Tuple[int, int, int, int],
+        api_client,
+        api_key: str,
+        scan_db,
+        scan_location: Optional[str],
+        location_matcher,
+        concurrent_requests: int = 5
+    ):
+        super().__init__()
+        self.file_items = file_items
+        self.selection = selection
+        self.api_client = api_client
+        self.api_key = api_key
+        self.scan_db = scan_db
+        self.scan_location = scan_location
+        self.location_matcher = location_matcher
+        self.concurrent_requests = concurrent_requests
+
+        self._cancelled = False
+        self._cancel_lock = threading.Lock()
+
+    def cancel(self):
+        """Request cancellation of the batch processing."""
+        with self._cancel_lock:
+            self._cancelled = True
+
+    def is_cancelled(self) -> bool:
+        """Check if cancellation was requested."""
+        with self._cancel_lock:
+            return self._cancelled
+
+    def _apply_fuzzy_matching(self, mission_data: dict) -> dict:
+        """Apply location fuzzy matching."""
+        if not mission_data or "objectives" not in mission_data:
+            return mission_data
+
+        for objective in mission_data.get("objectives", []):
+            if "collect_from" in objective:
+                original = objective["collect_from"]
+                matched = self.location_matcher.get_best_match(original, confidence_threshold=3)
+                objective["collect_from"] = matched
+
+            if "deliver_to" in objective:
+                original = objective["deliver_to"]
+                matched = self.location_matcher.get_best_match(original, confidence_threshold=3)
+                objective["deliver_to"] = matched
+
+        return mission_data
+
+    def _process_single_item(self, item: Tuple[int, str]) -> BatchItemResult:
+        """Process a single screenshot - runs in thread pool."""
+        index, file_path = item
+
+        # Check for cancellation
+        if self.is_cancelled():
+            return BatchItemResult(
+                index=index,
+                file_path=file_path,
+                success=False,
+                error="Cancelled"
+            )
+
+        try:
+            # Load and crop image
+            image = Image.open(file_path)
+            x1, y1, x2, y2 = self.selection
+
+            if x2 > image.width or y2 > image.height:
+                return BatchItemResult(
+                    index=index,
+                    file_path=file_path,
+                    success=False,
+                    error=f"Selection ({x2}x{y2}) exceeds image size ({image.width}x{image.height})"
+                )
+
+            cropped = image.crop(self.selection)
+
+            # API call (I/O bound)
+            result = self.api_client.extract_mission_data(cropped, self.api_key)
+
+            if result.get("success"):
+                mission_data = result["data"]
+
+                # Apply fuzzy matching
+                mission_data = self._apply_fuzzy_matching(mission_data)
+
+                # Store in database (thread-safe as SQLite handles this)
+                scan_id = self.scan_db.add_scan(mission_data, self.scan_location)
+                scan_record = self.scan_db.get_scan(scan_id)
+
+                return BatchItemResult(
+                    index=index,
+                    file_path=file_path,
+                    success=True,
+                    scan_id=scan_id,
+                    scan_record=scan_record
+                )
+            else:
+                return BatchItemResult(
+                    index=index,
+                    file_path=file_path,
+                    success=False,
+                    error=result.get("error", "Unknown error")
+                )
+
+        except Exception as e:
+            return BatchItemResult(
+                index=index,
+                file_path=file_path,
+                success=False,
+                error=str(e)
+            )
+
+    def run(self):
+        """Execute batch processing with concurrent API calls."""
+        success_count = 0
+        error_count = 0
+        errors = []
+        total = len(self.file_items)
+
+        # Use ThreadPoolExecutor for concurrent API calls
+        completed = 0
+        with ThreadPoolExecutor(max_workers=self.concurrent_requests) as executor:
+            # Submit all tasks
+            future_to_item = {
+                executor.submit(self._process_single_item, item): item
+                for item in self.file_items
+            }
+
+            # Process results as they complete
+            for future in as_completed(future_to_item):
+                if self.is_cancelled():
+                    # Cancel remaining futures
+                    for f in future_to_item:
+                        f.cancel()
+                    break
+
+                result = future.result()
+                completed += 1
+
+                # Emit progress (thread-safe via signal)
+                self.progress.emit(completed, total, result.file_path)
+
+                if result.success:
+                    success_count += 1
+                    self.item_completed.emit(result.index, True, result.scan_id or "")
+                    if result.scan_record:
+                        self.scan_added.emit(result.scan_record)
+                else:
+                    error_count += 1
+                    errors.append(f"{result.file_path}: {result.error}")
+                    self.item_completed.emit(result.index, False, result.error or "Unknown error")
+
+        # Emit completion signal
+        self.finished_processing.emit(success_count, error_count, errors)
+
+
 class ScreenshotParserTab(QWidget):
     """Tab for parsing screenshots from file or clipboard."""
 
@@ -294,6 +478,8 @@ class ScreenshotParserTab(QWidget):
         self._current_image = None  # PIL Image
         self._current_source = None  # Track source (file path or "clipboard")
         self._scan_location = None  # Selected in-game location
+        self._batch_worker: Optional[BatchProcessingWorker] = None
+        self._batch_progress: Optional[QProgressDialog] = None
 
         self._setup_ui()
         self._load_saved_selection()
@@ -613,7 +799,11 @@ class ScreenshotParserTab(QWidget):
             event.ignore()
 
     def _start_batch_processing(self):
-        """Process all files in the batch list."""
+        """Process all files in the batch list using concurrent processing."""
+        # Prevent starting if already running
+        if self._batch_worker is not None and self._batch_worker.isRunning():
+            return
+
         # Get selection area (from current image or saved config)
         selection = self.image_widget.get_selection()
         if not selection:
@@ -647,6 +837,7 @@ class ScreenshotParserTab(QWidget):
 
         # Confirm batch processing
         scan_location = self._get_current_scan_location()
+        concurrent = self.config.get_batch_concurrent_requests()
         loc_str = scan_location if scan_location else "(No Location)"
         x1, y1, x2, y2 = selection
 
@@ -655,7 +846,8 @@ class ScreenshotParserTab(QWidget):
             "Confirm Batch Process",
             f"Process {file_count} screenshot(s)?\n\n"
             f"Location: {loc_str}\n"
-            f"Selection: {x2-x1}x{y2-y1} at ({x1}, {y1})\n\n"
+            f"Selection: {x2-x1}x{y2-y1} at ({x1}, {y1})\n"
+            f"Concurrent requests: {concurrent}\n\n"
             "Each screenshot will be parsed and added to the database.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
@@ -663,92 +855,88 @@ class ScreenshotParserTab(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        # Build list of items to process
+        file_items = []
+        for i in range(file_count):
+            item = self.batch_file_list.item(i)
+            file_path = item.data(Qt.ItemDataRole.UserRole)
+            file_items.append((i, file_path))
+
         # Create progress dialog
-        progress = QProgressDialog(
-            "Processing screenshots...",
+        self._batch_progress = QProgressDialog(
+            "Initializing batch processing...",
             "Cancel",
             0,
             file_count,
             self
         )
-        progress.setWindowTitle("Batch Processing")
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
+        self._batch_progress.setWindowTitle("Batch Processing")
+        self._batch_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self._batch_progress.setMinimumDuration(0)
+        self._batch_progress.canceled.connect(self._cancel_batch_processing)
 
-        # Process files (from end to start to avoid index shifting issues)
-        success_count = 0
-        error_count = 0
-        errors = []
+        # Disable batch controls
+        self.batch_start_btn.setEnabled(False)
+        self.batch_add_btn.setEnabled(False)
 
-        # Build list of items to process
-        items_to_process = []
-        for i in range(file_count):
-            items_to_process.append((i, self.batch_file_list.item(i)))
+        # Create and start worker
+        self._batch_worker = BatchProcessingWorker(
+            file_items=file_items,
+            selection=selection,
+            api_client=self.api_client,
+            api_key=api_key,
+            scan_db=self.scan_db,
+            scan_location=scan_location,
+            location_matcher=self.location_matcher,
+            concurrent_requests=concurrent
+        )
 
-        for idx, (row_idx, item) in enumerate(items_to_process):
-            if progress.wasCanceled():
-                break
+        # Connect signals
+        self._batch_worker.progress.connect(self._on_batch_progress)
+        self._batch_worker.item_completed.connect(self._on_batch_item_completed)
+        self._batch_worker.scan_added.connect(self.scan_added.emit)
+        self._batch_worker.finished_processing.connect(self._on_batch_finished)
 
-            file_path = item.data(Qt.ItemDataRole.UserRole)
-            progress.setValue(idx)
-            progress.setLabelText(f"Processing {idx+1}/{file_count}:\n{file_path}")
-            QApplication.processEvents()
+        # Start processing
+        self._batch_worker.start()
 
-            try:
-                # Load image
-                image = Image.open(file_path)
+    def _cancel_batch_processing(self):
+        """Handle cancellation request from progress dialog."""
+        if self._batch_worker and self._batch_worker.isRunning():
+            self._batch_worker.cancel()
+            if self._batch_progress:
+                self._batch_progress.setLabelText("Cancelling... (waiting for in-progress requests)")
 
-                # Validate selection is within image bounds
-                if x2 > image.width or y2 > image.height:
-                    raise ValueError(
-                        f"Selection ({x2}x{y2}) exceeds image size ({image.width}x{image.height})"
-                    )
+    def _on_batch_progress(self, current: int, total: int, file_path: str):
+        """Handle progress update from worker."""
+        if self._batch_progress:
+            self._batch_progress.setValue(current)
+            self._batch_progress.setLabelText(f"Processing {current}/{total}:\n{file_path}")
 
-                # Crop to selection
-                cropped = image.crop(selection)
-
-                # Parse via API
-                result = self.api_client.extract_mission_data(cropped, api_key)
-
-                if result.get("success"):
-                    mission_data = result["data"]
-
-                    # Apply fuzzy matching
-                    mission_data = self._apply_location_fuzzy_matching(mission_data)
-
-                    # Store in database
-                    scan_id = self.scan_db.add_scan(mission_data, scan_location)
-
-                    # Emit signal to update scan database tab
-                    scan_record = self.scan_db.get_scan(scan_id)
-                    if scan_record:
-                        self.scan_added.emit(scan_record)
-
-                    success_count += 1
-                    logger.info(f"Batch: Parsed {file_path} -> {scan_id[:8]}")
-
-                    # Mark item for removal (will remove after loop to avoid index issues)
-                    item.setData(Qt.ItemDataRole.UserRole + 1, "success")
-                else:
-                    error_msg = result.get("error", "Unknown error")
-                    errors.append(f"{file_path}: {error_msg}")
-                    error_count += 1
-                    logger.error(f"Batch: Failed to parse {file_path}: {error_msg}")
-
-                    # Mark item as failed (red text)
-                    item.setForeground(QColor("red"))
-                    item.setToolTip(f"Error: {error_msg}")
-
-            except Exception as e:
-                errors.append(f"{file_path}: {str(e)}")
-                error_count += 1
-                logger.error(f"Batch: Error processing {file_path}: {e}")
-
-                # Mark item as failed
+    def _on_batch_item_completed(self, index: int, success: bool, info: str):
+        """Handle individual item completion from worker."""
+        item = self.batch_file_list.item(index)
+        if item:
+            if success:
+                # Mark for removal after completion
+                item.setData(Qt.ItemDataRole.UserRole + 1, "success")
+                logger.info(f"Batch: Parsed item {index} -> {info[:8] if info else 'unknown'}")
+            else:
+                # Mark as failed (red text)
                 item.setForeground(QColor("red"))
-                item.setToolTip(f"Error: {str(e)}")
+                item.setToolTip(f"Error: {info}")
+                logger.error(f"Batch: Failed item {index}: {info}")
 
-        progress.setValue(file_count)
+    def _on_batch_finished(self, success_count: int, error_count: int, errors: list):
+        """Handle batch completion from worker."""
+        # Close progress dialog
+        if self._batch_progress:
+            self._batch_progress.close()
+            self._batch_progress = None
+
+        # Re-enable batch controls
+        self.batch_start_btn.setEnabled(True)
+        self.batch_add_btn.setEnabled(True)
 
         # Remove successfully processed items (in reverse order)
         for i in range(self.batch_file_list.count() - 1, -1, -1):
@@ -758,18 +946,26 @@ class ScreenshotParserTab(QWidget):
 
         self._update_batch_ui_state()
 
+        # Check if cancelled
+        was_cancelled = any("Cancelled" in e for e in errors) if errors else False
+
+        # Clean up worker
+        self._batch_worker = None
+
         # Show summary
-        if progress.wasCanceled():
-            summary = f"Batch processing cancelled.\n\nProcessed: {success_count} successful, {error_count} failed"
+        if was_cancelled:
+            summary = f"Batch processing cancelled.\n\nProcessed: {success_count} successful, {error_count} failed/cancelled"
         else:
             summary = f"Batch processing complete.\n\nSuccessful: {success_count}\nFailed: {error_count}"
 
         if errors:
-            # Show first few errors
-            error_details = "\n".join(errors[:5])
-            if len(errors) > 5:
-                error_details += f"\n... and {len(errors) - 5} more errors"
-            summary += f"\n\nErrors:\n{error_details}"
+            # Filter out cancellation messages and show first few errors
+            real_errors = [e for e in errors if "Cancelled" not in e]
+            if real_errors:
+                error_details = "\n".join(real_errors[:5])
+                if len(real_errors) > 5:
+                    error_details += f"\n... and {len(real_errors) - 5} more errors"
+                summary += f"\n\nErrors:\n{error_details}"
 
         QMessageBox.information(self, "Batch Complete", summary)
 

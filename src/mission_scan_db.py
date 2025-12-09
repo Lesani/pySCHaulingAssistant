@@ -20,6 +20,64 @@ from src.location_hierarchy import LocationHierarchy
 
 logger = get_logger()
 
+# Canonical contractor names and their aliases (lowercase keys)
+CONTRACTOR_CANONICAL = {
+    "Covalex Shipping": [
+        "covalex shipping",
+        "covalex",
+        "covalex independent contractors",
+    ],
+    "Ling Family Hauling": [
+        "ling family hauling",
+        "ling family",
+        "ling hauling",
+    ],
+    "Red Wind Linehaul": [
+        "red wind linehaul",
+        "red wind",
+        "redwind",
+    ],
+}
+
+# Build reverse lookup: alias -> canonical
+_CONTRACTOR_ALIAS_MAP = {}
+for canonical, aliases in CONTRACTOR_CANONICAL.items():
+    for alias in aliases:
+        _CONTRACTOR_ALIAS_MAP[alias] = canonical
+
+
+def normalize_contractor(contracted_by: str) -> str:
+    """
+    Normalize a contractor name to its canonical form.
+
+    Handles OCR errors and variations like "Covalex" -> "Covalex Shipping".
+
+    Args:
+        contracted_by: Raw contractor name from scan
+
+    Returns:
+        Canonical contractor name, or original if unknown
+    """
+    if not contracted_by:
+        return ""
+
+    lower = contracted_by.lower().strip()
+
+    # Exact alias match
+    if lower in _CONTRACTOR_ALIAS_MAP:
+        return _CONTRACTOR_ALIAS_MAP[lower]
+
+    # Prefix match - check if input starts with a known company name
+    for alias, canonical in _CONTRACTOR_ALIAS_MAP.items():
+        # Check if the first word matches
+        first_word = lower.split()[0] if lower.split() else ""
+        alias_first = alias.split()[0] if alias.split() else ""
+        if first_word and alias_first and first_word == alias_first:
+            return canonical
+
+    # No match - return original (trimmed)
+    return contracted_by.strip()
+
 
 class MissionScanDB:
     """Database for storing scanned missions with location and timestamp."""
@@ -35,7 +93,7 @@ class MissionScanDB:
         """
         Create a hashable identity tuple for mission comparison.
 
-        Identity is based on reward, contracted_by, and objectives.
+        Identity is based on reward, contracted_by (normalized), and objectives.
 
         Args:
             mission_data: Dict containing mission fields
@@ -44,7 +102,7 @@ class MissionScanDB:
             Tuple that uniquely identifies the mission content
         """
         reward = mission_data.get("reward", 0)
-        contracted_by = mission_data.get("contracted_by", "")
+        contracted_by = normalize_contractor(mission_data.get("contracted_by", ""))
 
         # Normalize objectives to sorted tuple of tuples
         objectives = mission_data.get("objectives", [])
@@ -180,6 +238,14 @@ class MissionScanDB:
         Returns:
             Scan ID (existing or new UUID)
         """
+        # Normalize contractor name before processing
+        if "contracted_by" in mission_data:
+            original = mission_data["contracted_by"]
+            normalized = normalize_contractor(original)
+            if normalized != original:
+                logger.debug(f"Normalized contractor: '{original}' -> '{normalized}'")
+                mission_data["contracted_by"] = normalized
+
         # Check for duplicate
         existing_scan = self._find_duplicate_scan(mission_data)
 
@@ -416,6 +482,93 @@ class MissionScanDB:
             if scan["id"] == scan_id:
                 return scan.get("synced", False)
         return False
+
+    def deduplicate_existing(self) -> int:
+        """
+        Scan database for duplicates and merge them.
+
+        First normalizes contractor names, then groups scans by mission identity,
+        keeps the one with earliest timestamp, merges all locations, and removes
+        the duplicates.
+
+        Returns:
+            Count of duplicates removed
+        """
+        # Normalize contractors first (this affects identity matching)
+        self.normalize_contractors()
+
+        # Group scans by identity
+        identity_groups: Dict[tuple, List[Dict[str, Any]]] = {}
+
+        for scan in self.scans:
+            identity = self._get_mission_identity(scan.get("mission_data", {}))
+            if identity not in identity_groups:
+                identity_groups[identity] = []
+            identity_groups[identity].append(scan)
+
+        # Find groups with duplicates
+        duplicates_removed = 0
+        ids_to_remove = set()
+
+        for identity, group in identity_groups.items():
+            if len(group) <= 1:
+                continue  # No duplicates
+
+            # Sort by timestamp to keep the earliest
+            group.sort(key=lambda x: x.get("scan_timestamp", ""))
+            canonical = group[0]
+
+            # Merge locations from all duplicates into the canonical
+            all_locations = set(canonical.get("scan_locations", []))
+            for duplicate in group[1:]:
+                for loc in duplicate.get("scan_locations", []):
+                    if loc:
+                        all_locations.add(loc)
+                ids_to_remove.add(duplicate["id"])
+                duplicates_removed += 1
+
+            canonical["scan_locations"] = list(all_locations)
+            canonical["synced"] = False  # Mark for re-sync
+
+        # Remove duplicates
+        if ids_to_remove:
+            self.scans = [s for s in self.scans if s["id"] not in ids_to_remove]
+            self.save()
+            logger.info(f"Deduplicated {duplicates_removed} scans")
+
+        return duplicates_removed
+
+    def normalize_contractors(self) -> int:
+        """
+        Normalize all contractor names in existing scans.
+
+        Updates scans with non-canonical contractor names and marks them
+        for re-sync so the corrected values are uploaded.
+
+        Returns:
+            Count of scans that were normalized
+        """
+        normalized_count = 0
+
+        for scan in self.scans:
+            mission_data = scan.get("mission_data", {})
+            if "contracted_by" not in mission_data:
+                continue
+
+            original = mission_data["contracted_by"]
+            normalized = normalize_contractor(original)
+
+            if normalized != original:
+                mission_data["contracted_by"] = normalized
+                scan["synced"] = False  # Mark for re-sync
+                normalized_count += 1
+                logger.debug(f"Normalized contractor: '{original}' -> '{normalized}'")
+
+        if normalized_count > 0:
+            self.save()
+            logger.info(f"Normalized {normalized_count} contractor names")
+
+        return normalized_count
 
     def get_locations_with_scans(self) -> List[str]:
         """

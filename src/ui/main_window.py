@@ -19,6 +19,7 @@ from src.location_autocomplete import LocationMatcher
 from src.cargo_autocomplete import CargoMatcher
 from src.global_hotkeys import GlobalHotkeyManager, is_app_focused
 from src.discord_auth import DiscordAuth
+from src.sync_service import SyncService
 from src.sound_service import init_sound_service
 from src.logger import get_logger
 
@@ -59,6 +60,9 @@ class MainWindow(QMainWindow):
 
         # Discord authentication
         self.discord_auth = DiscordAuth(config)
+
+        # Sync service
+        self.sync_service = SyncService(config, self.discord_auth)
 
         # Window settings
         self.settings = QSettings("SCHaulingAssistant", "MainWindow")
@@ -123,7 +127,8 @@ class MainWindow(QMainWindow):
             self.config,
             self.scan_db,
             self.location_matcher,
-            ShipManager()
+            ShipManager(),
+            self.sync_service
         )
         self.screenshot_parser_tab = ScreenshotParserTab(
             self.config,

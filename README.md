@@ -34,6 +34,8 @@ A PyQt6 desktop application for Star Citizen players to streamline hauling missi
 - **Multiple Optimization Goals**: Maximize reward, minimize stops, minimize distance, or optimize reward per stop/SCU
 - **Ship-Aware**: Automatically filters missions that fit your ship's cargo capacity
 
+![Route Finder](.images/app_route.png)
+
 ### Cloud Sync (Optional)
 - **Scan Database**: Store historical mission scans in the cloud
 - **Discord Authentication**: Secure sync via Discord OAuth

@@ -109,6 +109,16 @@ class ConfigTab(QWidget):
         self.max_tokens_spin.setValue(1024)
         api_layout.addRow("Max Tokens:", self.max_tokens_spin)
 
+        # Batch concurrency
+        self.batch_concurrency_spin = QSpinBox()
+        self.batch_concurrency_spin.setRange(1, 10)
+        self.batch_concurrency_spin.setValue(5)
+        self.batch_concurrency_spin.setToolTip(
+            "Number of screenshots to process simultaneously in batch mode.\n"
+            "Higher values process batches faster."
+        )
+        api_layout.addRow("Batch Concurrency:", self.batch_concurrency_spin)
+
         api_group.setLayout(api_layout)
         content_layout.addWidget(api_group)
 
@@ -354,6 +364,10 @@ class ConfigTab(QWidget):
         max_tokens = self.config.get("api", "max_tokens", default=1024)
         self.max_tokens_spin.setValue(max_tokens)
 
+        # Batch concurrency
+        batch_concurrency = self.config.get("api", "batch_concurrent_requests", default=5)
+        self.batch_concurrency_spin.setValue(batch_concurrency)
+
         # UI settings
         auto_switch = self.config.get("ui", "auto_switch_to_hauling", default=True)
         self.auto_switch_check.setChecked(auto_switch)
@@ -495,6 +509,7 @@ class ConfigTab(QWidget):
 
             self.config.settings["api"][provider]["default_model"] = self.model_combo.currentText()
             self.config.settings["api"]["max_tokens"] = self.max_tokens_spin.value()
+            self.config.settings["api"]["batch_concurrent_requests"] = self.batch_concurrency_spin.value()
 
             # Save API key to config file
             api_key = self.api_key_edit.text().strip()
@@ -610,6 +625,7 @@ class ConfigTab(QWidget):
             self.api_key_edit.clear()
             self.model_combo.setCurrentText("claude-sonnet-4-5")
             self.max_tokens_spin.setValue(1024)
+            self.batch_concurrency_spin.setValue(5)
 
             # Reset UI settings
             self.auto_switch_check.setChecked(True)

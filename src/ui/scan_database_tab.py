@@ -16,7 +16,7 @@ from PyQt6.QtGui import QColor, QBrush
 from datetime import datetime
 from typing import Optional, TYPE_CHECKING, List
 
-from src.mission_scan_db import MissionScanDB
+from src.mission_scan_db import MissionScanDB, normalize_contractor
 from src.sync_service import SyncService
 from src.config import Config
 from src.special_locations import SPECIAL_LOCATIONS
@@ -624,6 +624,12 @@ class ScanDatabaseTab(QWidget):
             )
             return
 
+        # Normalize contractors in existing scans before sync
+        # This fixes variations like "Covalex Independent Contractors" -> "Covalex Shipping"
+        normalized = self.scan_db.normalize_contractors()
+        if normalized > 0:
+            logger.info(f"Normalized {normalized} contractor names before sync")
+
         # Get local scans
         local_scans = self.scan_db.get_scans()
 
@@ -650,22 +656,46 @@ class ScanDatabaseTab(QWidget):
 
             # Import downloaded scans
             imported = 0
+            merged_on_import = 0
             for scan in downloaded:
-                # Check if we already have this scan
-                if not self.scan_db.get_scan(scan["id"]):
-                    # Handle both scan_locations (array) and legacy scan_location (string)
-                    locations = scan.get("scan_locations", [])
-                    if not locations and scan.get("scan_location"):
-                        locations = [scan.get("scan_location")]
+                # Handle both scan_locations (array) and legacy scan_location (string)
+                locations = scan.get("scan_locations", [])
+                if not locations and scan.get("scan_location"):
+                    locations = [scan.get("scan_location")]
 
-                    # Add to local database (already synced since it came from server)
+                # Check if we already have this scan by ID
+                if self.scan_db.get_scan(scan["id"]):
+                    continue  # Already have it
+
+                # Check if we have a scan with the same identity (same mission)
+                mission_data = scan.get("mission_data", {})
+                existing = self.scan_db._find_duplicate_scan(mission_data)
+
+                if existing:
+                    # Merge locations into existing scan
+                    for loc in locations:
+                        if loc:
+                            self.scan_db.add_location_to_scan(existing["id"], loc)
+                    merged_on_import += 1
+                else:
+                    # Normalize contractor before storing
+                    needs_resync = False
+                    if "contracted_by" in mission_data:
+                        original = mission_data["contracted_by"]
+                        normalized = normalize_contractor(original)
+                        if normalized != original:
+                            mission_data["contracted_by"] = normalized
+                            needs_resync = True  # Server has wrong value
+
+                    # Add to local database
+                    # Mark as unsynced if contractor was normalized (so corrected value uploads)
                     self.scan_db.scans.append({
                         "id": scan["id"],
                         "scan_timestamp": scan.get("scan_timestamp"),
                         "scan_locations": locations,
-                        "mission_data": scan.get("mission_data", {}),
+                        "mission_data": mission_data,
                         "synced_from": scan.get("uploaded_by", "unknown"),
-                        "synced": True
+                        "synced": not needs_resync
                     })
                     imported += 1
 
@@ -675,15 +705,24 @@ class ScanDatabaseTab(QWidget):
 
             # Show summary
             username = self.sync_service.get_username() or "Unknown"
+            merged_server = result.get("merged", 0)
             summary = f"Sync complete! (as {username})\n\n"
             summary += f"Uploaded: {uploaded} new scans\n"
             if updated > 0:
                 summary += f"Updated: {updated} scan locations\n"
+            if merged_server > 0:
+                summary += f"Merged (server): {merged_server} duplicates\n"
             summary += f"Skipped: {duplicates} duplicates\n"
-            summary += f"Downloaded: {imported} new scans from others"
+            summary += f"Downloaded: {imported} new scans"
+            if merged_on_import > 0:
+                summary += f" (+{merged_on_import} merged locally)"
 
             QMessageBox.information(self, "Sync Complete", summary)
-            logger.info(f"Sync complete: uploaded {uploaded}, updated {updated}, downloaded {imported}")
+            logger.info(
+                f"Sync complete: uploaded {uploaded}, updated {updated}, "
+                f"merged_server {merged_server}, downloaded {imported}, "
+                f"merged_local {merged_on_import}"
+            )
 
         else:
             QMessageBox.critical(
