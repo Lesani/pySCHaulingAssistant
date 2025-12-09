@@ -17,14 +17,17 @@ from PyQt6.QtGui import QColor
 
 from typing import Optional, List, TYPE_CHECKING
 
-from src.mission_scan_db import MissionScanDB
+if TYPE_CHECKING:
+    from src.sync_service import SyncService
+
+from src.mission_scan_db import MissionScanDB, CONTRACTOR_CANONICAL
 from src.config import Config
 from src.location_autocomplete import LocationMatcher
 from src.ship_profiles import ShipManager, SHIP_PROFILES
 from src.services.route_finder_service import (
     RouteFinderService, RouteFinderFilters, OptimizationGoal,
     OptimizationWeights, OPTIMIZATION_PRESETS, SearchStrategy,
-    CandidateRoute, RANK_HIERARCHY
+    CandidateRoute, RANK_HIERARCHY, ContractorRankFilter
 )
 from src.services.location_type_classifier import LocationType, LocationTypeClassifier
 from src.logger import get_logger
@@ -64,10 +67,40 @@ class SortableTreeWidgetItem(QTreeWidgetItem):
             return 0.0
 
 
+class StopTreeWidgetItem(QTreeWidgetItem):
+    """Tree widget item for stops with numeric prefix sorting."""
+
+    def __lt__(self, other: QTreeWidgetItem) -> bool:
+        """Compare items by extracting numeric prefix (e.g., '5. Location')."""
+        tree = self.treeWidget()
+        if not tree:
+            return super().__lt__(other)
+
+        col = tree.sortColumn()
+        if col == 0:
+            # Extract leading number from "N. Location" format
+            self_num = self._extract_prefix_number(self.text(0))
+            other_num = self._extract_prefix_number(other.text(0))
+            if self_num is not None and other_num is not None:
+                return self_num < other_num
+
+        return super().__lt__(other)
+
+    def _extract_prefix_number(self, text: str) -> int | None:
+        """Extract leading number before the first dot."""
+        dot_idx = text.find(".")
+        if dot_idx > 0:
+            try:
+                return int(text[:dot_idx])
+            except ValueError:
+                pass
+        return None
+
+
 class RouteFinderWorker(QThread):
     """Background worker for route finding."""
 
-    finished = pyqtSignal(list)  # List[CandidateRoute]
+    finished = pyqtSignal(list, int)  # List[CandidateRoute], pool_size
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
@@ -97,7 +130,8 @@ class RouteFinderWorker(QThread):
                 strategy=self.strategy,
                 offset=self.offset
             )
-            self.finished.emit(routes)
+            pool_size = self.service.last_pool_size
+            self.finished.emit(routes, pool_size)
         except Exception as e:
             logger.error(f"Route finder error: {e}")
             self.error.emit(str(e))
@@ -111,7 +145,8 @@ class RouteFinderTab(QWidget):
         config: Config,
         scan_db: MissionScanDB,
         location_matcher: LocationMatcher,
-        ship_manager: ShipManager = None
+        ship_manager: ShipManager = None,
+        sync_service: Optional["SyncService"] = None
     ):
         super().__init__()
 
@@ -119,6 +154,7 @@ class RouteFinderTab(QWidget):
         self.scan_db = scan_db
         self.location_matcher = location_matcher
         self.ship_manager = ship_manager or ShipManager()
+        self.sync_service = sync_service
         self.classifier = LocationTypeClassifier()
 
         self.service = RouteFinderService(
@@ -134,6 +170,7 @@ class RouteFinderTab(QWidget):
         self._last_weights: Optional[OptimizationWeights] = None
         self._last_strategy: Optional[SearchStrategy] = None
         self._route_offset: int = 0
+        self._last_pool_size: int = 0
 
         self._setup_ui()
         self._load_initial_data()
@@ -149,7 +186,7 @@ class RouteFinderTab(QWidget):
 
         # Left panel - Filters
         left_widget = QWidget()
-        left_widget.setMinimumWidth(410)
+        left_widget.setMinimumWidth(460)
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -257,62 +294,95 @@ class RouteFinderTab(QWidget):
         system_group.setLayout(system_layout)
         filters_layout.addWidget(system_group)
 
-        # Rank and reward filters
-        mission_group = QGroupBox("Mission Filters")
-        mission_layout = QVBoxLayout()
+        # Contractor filters with per-contractor rank selection
+        contractor_group = QGroupBox("Contractors")
+        contractor_layout = QVBoxLayout()
+        contractor_layout.setSpacing(4)
 
-        # Rank range
-        rank_layout = QHBoxLayout()
-        rank_label = QLabel("Rank:")
-        rank_label.setFixedWidth(50)
-        rank_layout.addWidget(rank_label)
-        self.min_rank = QComboBox()
-        self.min_rank.setFixedWidth(130)
-        self.min_rank.addItem("Any")
-        for rank in RANK_HIERARCHY:
-            self.min_rank.addItem(rank)
-        rank_layout.addWidget(self.min_rank)
-        to_label1 = QLabel("to")
-        to_label1.setFixedWidth(25)
-        to_label1.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        rank_layout.addWidget(to_label1)
-        self.max_rank = QComboBox()
-        self.max_rank.setFixedWidth(130)
-        self.max_rank.addItem("Any")
-        for rank in RANK_HIERARCHY:
-            self.max_rank.addItem(rank)
-        rank_layout.addWidget(self.max_rank)
-        rank_layout.addStretch()
-        mission_layout.addLayout(rank_layout)
+        # Store contractor widgets: {contractor_name: (checkbox, min_rank_combo, max_rank_combo)}
+        self.contractor_widgets = {}
 
-        # Reward range
+        # Build dynamically from CONTRACTOR_CANONICAL
+        for contractor_name in sorted(CONTRACTOR_CANONICAL.keys()):
+            # Row for each contractor
+            row_layout = QHBoxLayout()
+            row_layout.setSpacing(4)
+
+            # Checkbox for contractor
+            cb = QCheckBox(contractor_name)
+            cb.setChecked(True)  # All contractors enabled by default
+            cb.setMinimumWidth(140)
+            row_layout.addWidget(cb)
+
+            # Min rank
+            min_rank = QComboBox()
+            min_rank.setFixedWidth(90)
+            min_rank.addItem("Any")
+            for rank in RANK_HIERARCHY:
+                min_rank.addItem(rank)
+            row_layout.addWidget(min_rank)
+
+            # "to" label
+            to_label = QLabel("-")
+            to_label.setFixedWidth(15)
+            to_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            row_layout.addWidget(to_label)
+
+            # Max rank
+            max_rank = QComboBox()
+            max_rank.setFixedWidth(90)
+            max_rank.addItem("Any")
+            for rank in RANK_HIERARCHY:
+                max_rank.addItem(rank)
+            row_layout.addWidget(max_rank)
+
+            row_layout.addStretch()
+            contractor_layout.addLayout(row_layout)
+
+            # Store references
+            self.contractor_widgets[contractor_name] = (cb, min_rank, max_rank)
+
+            # Connect checkbox to enable/disable rank combos
+            cb.toggled.connect(
+                lambda checked, mr=min_rank, xr=max_rank: self._on_contractor_toggled(checked, mr, xr)
+            )
+
+        # Quick select buttons
+        contractor_btn_layout = QHBoxLayout()
+        all_contractors_btn = QPushButton("All")
+        all_contractors_btn.clicked.connect(lambda: self._set_all_contractors(True))
+        none_contractors_btn = QPushButton("None")
+        none_contractors_btn.clicked.connect(lambda: self._set_all_contractors(False))
+        contractor_btn_layout.addWidget(all_contractors_btn)
+        contractor_btn_layout.addWidget(none_contractors_btn)
+        contractor_btn_layout.addStretch()
+        contractor_layout.addLayout(contractor_btn_layout)
+
+        contractor_group.setLayout(contractor_layout)
+        filters_layout.addWidget(contractor_group)
+
+        # Reward filter (separate from contractors)
+        reward_group = QGroupBox("Reward Filter")
         reward_layout = QHBoxLayout()
-        reward_label = QLabel("Reward:")
-        reward_label.setFixedWidth(50)
-        reward_layout.addWidget(reward_label)
+        reward_layout.addWidget(QLabel("Min:"))
         self.min_reward = QSpinBox()
-        self.min_reward.setFixedWidth(130)
+        self.min_reward.setFixedWidth(110)
         self.min_reward.setRange(0, 10000000)
         self.min_reward.setSingleStep(10000)
         self.min_reward.setSpecialValueText("Any")
         self.min_reward.setSuffix(" aUEC")
         reward_layout.addWidget(self.min_reward)
-        to_label2 = QLabel("to")
-        to_label2.setFixedWidth(25)
-        to_label2.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        reward_layout.addWidget(to_label2)
+        reward_layout.addWidget(QLabel("Max:"))
         self.max_reward = QSpinBox()
-        self.max_reward.setFixedWidth(130)
+        self.max_reward.setFixedWidth(110)
         self.max_reward.setRange(0, 10000000)
         self.max_reward.setSingleStep(10000)
         self.max_reward.setSpecialValueText("Any")
         self.max_reward.setSuffix(" aUEC")
         reward_layout.addWidget(self.max_reward)
         reward_layout.addStretch()
-        mission_layout.addLayout(reward_layout)
-
-        mission_group.setLayout(mission_layout)
-        filters_layout.addWidget(mission_group)
+        reward_group.setLayout(reward_layout)
+        filters_layout.addWidget(reward_group)
 
         # Ship selection
         ship_group = QGroupBox("Ship")
@@ -480,7 +550,7 @@ class RouteFinderTab(QWidget):
         splitter.addWidget(right_widget)
 
         # Set splitter sizes (filters narrower than results)
-        splitter.setSizes([350, 650])
+        splitter.setSizes([400, 600])
 
         layout.addWidget(splitter, 1)
 
@@ -514,6 +584,16 @@ class RouteFinderTab(QWidget):
         for loc_type, cb in self.location_type_checks.items():
             cb.setChecked(loc_type in ground_types)
 
+    def _on_contractor_toggled(self, checked: bool, min_rank: QComboBox, max_rank: QComboBox):
+        """Handle contractor checkbox toggle - enable/disable rank combos."""
+        min_rank.setEnabled(checked)
+        max_rank.setEnabled(checked)
+
+    def _set_all_contractors(self, checked: bool):
+        """Set all contractor checkboxes."""
+        for cb, min_rank, max_rank in self.contractor_widgets.values():
+            cb.setChecked(checked)
+
     def _clear_filters(self):
         """Reset filters to defaults."""
         self.start_location.clear()
@@ -523,8 +603,13 @@ class RouteFinderTab(QWidget):
         for cb in self.system_checks.values():
             cb.setChecked(False)
         self.system_checks["Stanton"].setChecked(True)
-        self.min_rank.setCurrentIndex(0)
-        self.max_rank.setCurrentIndex(0)
+
+        # Reset contractor filters
+        for cb, min_rank, max_rank in self.contractor_widgets.values():
+            cb.setChecked(True)
+            min_rank.setCurrentIndex(0)  # "Any"
+            max_rank.setCurrentIndex(0)  # "Any"
+
         self.min_reward.setValue(0)
         self.max_reward.setValue(0)
 
@@ -545,15 +630,25 @@ class RouteFinderTab(QWidget):
             if cb.isChecked()
         ]
 
-        # Get rank range
-        min_rank = None
-        max_rank = None
-        min_rank_text = self.min_rank.currentText()
-        max_rank_text = self.max_rank.currentText()
-        if min_rank_text != "Any":
-            min_rank = min_rank_text
-        if max_rank_text != "Any":
-            max_rank = max_rank_text
+        # Get contractor filters (only checked contractors with their rank requirements)
+        contractor_filters = {}
+        for contractor_name, (cb, min_rank_combo, max_rank_combo) in self.contractor_widgets.items():
+            if cb.isChecked():
+                min_rank_text = min_rank_combo.currentText()
+                max_rank_text = max_rank_combo.currentText()
+                contractor_filters[contractor_name] = ContractorRankFilter(
+                    min_rank=min_rank_text if min_rank_text != "Any" else None,
+                    max_rank=max_rank_text if max_rank_text != "Any" else None
+                )
+
+        # If all contractors are selected with no rank restrictions, use None (allow all)
+        if len(contractor_filters) == len(self.contractor_widgets):
+            all_any = all(
+                f.min_rank is None and f.max_rank is None
+                for f in contractor_filters.values()
+            )
+            if all_any:
+                contractor_filters = None
 
         # Get reward range
         min_reward = self.min_reward.value() if self.min_reward.value() > 0 else None
@@ -570,12 +665,11 @@ class RouteFinderTab(QWidget):
             starting_location=starting,
             allowed_location_types=allowed_types,
             allowed_systems=allowed_systems,
-            min_rank=min_rank,
-            max_rank=max_rank,
             min_reward=min_reward,
             max_reward=max_reward,
             ship_key=ship_key,
-            round_trip=self.round_trip.isChecked()
+            round_trip=self.round_trip.isChecked(),
+            contractor_filters=contractor_filters
         )
 
     def _on_weight_changed(self):
@@ -625,6 +719,11 @@ class RouteFinderTab(QWidget):
         if not filters.allowed_systems:
             self.status_label.setText("Error: Select at least one system")
             return
+        # Check if at least one contractor is selected
+        any_contractor = any(cb.isChecked() for cb, _, _ in self.contractor_widgets.values())
+        if not any_contractor:
+            self.status_label.setText("Error: Select at least one contractor")
+            return
         if not weights.is_valid():
             self.status_label.setText("Error: Set at least one optimization weight > 0")
             return
@@ -634,6 +733,7 @@ class RouteFinderTab(QWidget):
         self._last_weights = weights
         self._last_strategy = strategy
         self._route_offset = 0
+        self._last_pool_size = 0
         self._current_routes = []  # Clear previous results
 
         # Start worker
@@ -657,7 +757,7 @@ class RouteFinderTab(QWidget):
         """Handle progress updates."""
         self.status_label.setText(message)
 
-    def _on_routes_found(self, routes: List[CandidateRoute]):
+    def _on_routes_found(self, routes: List[CandidateRoute], pool_size: int):
         """Handle route finding completion."""
         self.find_btn.setEnabled(True)
         self.find_btn.setText("Find Routes")
@@ -665,6 +765,7 @@ class RouteFinderTab(QWidget):
 
         self._current_routes.extend(routes)
         self._route_offset += len(routes)
+        self._last_pool_size = pool_size
 
         if not self._current_routes:
             self.results_label.setText("No routes found")
@@ -673,7 +774,7 @@ class RouteFinderTab(QWidget):
             return
 
         self.results_label.setText(f"Found {len(self._current_routes)} route(s)")
-        self._display_routes(self._current_routes)
+        self._display_routes(self._current_routes, apply_default_sort=True)
 
         # Show "More" button if we got a full batch (more may be available)
         if len(routes) >= 10:
@@ -682,7 +783,7 @@ class RouteFinderTab(QWidget):
             self.more_btn.hide()
 
         total_missions = sum(len(r.missions) for r in self._current_routes)
-        self.status_label.setText(f"Found {len(self._current_routes)} routes from {total_missions} missions")
+        self.status_label.setText(f"Found {len(self._current_routes)} routes from {pool_size} missions (using {total_missions})")
 
     def _on_route_error(self, error: str):
         """Handle route finding error."""
@@ -716,7 +817,7 @@ class RouteFinderTab(QWidget):
         self._worker.progress.connect(self._on_progress)
         self._worker.start()
 
-    def _on_more_routes_found(self, routes: List[CandidateRoute]):
+    def _on_more_routes_found(self, routes: List[CandidateRoute], pool_size: int):
         """Handle more routes loaded."""
         self.find_btn.setEnabled(True)
         self.more_btn.setEnabled(True)
@@ -730,6 +831,7 @@ class RouteFinderTab(QWidget):
 
         self._current_routes.extend(routes)
         self._route_offset += len(routes)
+        self._last_pool_size = pool_size
 
         self.results_label.setText(f"Found {len(self._current_routes)} route(s)")
         self._display_routes(self._current_routes)
@@ -739,9 +841,9 @@ class RouteFinderTab(QWidget):
             self.more_btn.hide()
 
         total_missions = sum(len(r.missions) for r in self._current_routes)
-        self.status_label.setText(f"Found {len(self._current_routes)} routes from {total_missions} missions")
+        self.status_label.setText(f"Found {len(self._current_routes)} routes from {pool_size} missions (using {total_missions})")
 
-    def _display_routes(self, routes: List[CandidateRoute]):
+    def _display_routes(self, routes: List[CandidateRoute], apply_default_sort: bool = False):
         """Display routes in the results tree."""
         self.results_tree.clear()
         # Disable sorting while populating to avoid performance issues
@@ -778,6 +880,21 @@ class RouteFinderTab(QWidget):
         # Re-enable sorting after populating
         self.results_tree.setSortingEnabled(True)
 
+        # Apply default sort based on dominant optimization goal
+        if apply_default_sort and self._last_weights:
+            goal = self._last_weights.get_dominant_goal()
+            # Map goals to columns and sort order
+            # Columns: 0=Route, 1=Reward, 2=Stops, 3=SCU, 4=Missions, 5=Score
+            sort_config = {
+                OptimizationGoal.MAX_REWARD: (1, Qt.SortOrder.DescendingOrder),
+                OptimizationGoal.FEWEST_STOPS: (2, Qt.SortOrder.AscendingOrder),
+                OptimizationGoal.MIN_DISTANCE: (5, Qt.SortOrder.DescendingOrder),
+                OptimizationGoal.BEST_REWARD_PER_STOP: (5, Qt.SortOrder.DescendingOrder),
+                OptimizationGoal.BEST_REWARD_PER_SCU: (5, Qt.SortOrder.DescendingOrder),
+            }
+            col, order = sort_config.get(goal, (5, Qt.SortOrder.DescendingOrder))
+            self.results_tree.sortByColumn(col, order)
+
     def _on_item_expanded(self, item: QTreeWidgetItem):
         """Handle item expansion - populate details."""
         # Check if already populated
@@ -803,7 +920,7 @@ class RouteFinderTab(QWidget):
         items_to_span.append(stops_item)
 
         for stop in candidate.route.stops:
-            stop_item = QTreeWidgetItem(stops_item)
+            stop_item = StopTreeWidgetItem(stops_item)
             stop_item.setText(0, f"{stop.stop_number}. {stop.location}")
             items_to_span.append(stop_item)
 

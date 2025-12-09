@@ -166,21 +166,13 @@ RANK_HIERARCHY = [
 
 
 @dataclass
-class RouteFinderFilters:
-    """Filters for route finding."""
-    max_stops: int = 5
-    starting_location: Optional[str] = None
-    allowed_location_types: List[str] = field(default_factory=lambda: LocationType.all_types())
-    allowed_systems: List[str] = field(default_factory=lambda: ["Stanton", "Nyx", "Pyro"])
-    min_rank: Optional[str] = None  # Minimum rank (includes this rank and higher)
-    max_rank: Optional[str] = None  # Maximum rank (includes this rank and lower)
-    min_reward: Optional[float] = None
-    max_reward: Optional[float] = None
-    ship_key: str = "RSI_ZEUS_MK2_CL"
-    round_trip: bool = False
+class ContractorRankFilter:
+    """Rank filter for a specific contractor."""
+    min_rank: Optional[str] = None
+    max_rank: Optional[str] = None
 
     def get_allowed_ranks(self) -> Optional[List[str]]:
-        """Get list of allowed ranks based on min_rank and max_rank."""
+        """Get list of allowed ranks for this contractor."""
         if not self.min_rank and not self.max_rank:
             return None  # All ranks allowed
 
@@ -193,13 +185,39 @@ class RouteFinderFilters:
             if self.max_rank:
                 max_idx = RANK_HIERARCHY.index(self.max_rank)
 
-            # Handle case where min > max (return empty or swap)
             if min_idx > max_idx:
                 return []
 
             return RANK_HIERARCHY[min_idx:max_idx + 1]
         except ValueError:
-            return None  # Unknown rank, allow all
+            return None
+
+
+@dataclass
+class RouteFinderFilters:
+    """Filters for route finding."""
+    max_stops: int = 5
+    starting_location: Optional[str] = None
+    allowed_location_types: List[str] = field(default_factory=lambda: LocationType.all_types())
+    allowed_systems: List[str] = field(default_factory=lambda: ["Stanton", "Nyx", "Pyro"])
+    min_reward: Optional[float] = None
+    max_reward: Optional[float] = None
+    ship_key: str = "RSI_ZEUS_MK2_CL"
+    round_trip: bool = False
+    # Per-contractor filtering: contractor name -> ContractorRankFilter
+    # If None, all contractors allowed with any rank
+    # If dict, only listed contractors allowed with their specific rank filters
+    contractor_filters: Optional[Dict[str, ContractorRankFilter]] = None
+
+    def get_allowed_ranks_for_contractor(self, contractor: str) -> Optional[List[str]]:
+        """Get list of allowed ranks for a specific contractor."""
+        if self.contractor_filters is None:
+            return None  # All ranks allowed (no contractor filtering)
+
+        if contractor not in self.contractor_filters:
+            return []  # Contractor not in allowed list
+
+        return self.contractor_filters[contractor].get_allowed_ranks()
 
 
 @dataclass
@@ -270,6 +288,9 @@ class RouteFinderService:
         self._thread_count = self._get_thread_count()
         self._worker_timeout = self._get_worker_timeout()
 
+        # Track pool size from last filter operation
+        self._last_pool_size = 0
+
     def _get_thread_count(self) -> int:
         """Get configured thread count or default."""
         if self._config:
@@ -294,6 +315,11 @@ class RouteFinderService:
             self._executor.shutdown(wait=False)
             self._executor = None
 
+    @property
+    def last_pool_size(self) -> int:
+        """Return the number of missions that matched filters in the last search."""
+        return self._last_pool_size
+
     def filter_missions(self, filters: RouteFinderFilters) -> List[Dict[str, Any]]:
         """
         Filter mission scans based on criteria.
@@ -304,17 +330,17 @@ class RouteFinderService:
         Returns:
             List of matching scan dicts
         """
-        # Get initial scans from DB with basic filters
-        allowed_ranks = filters.get_allowed_ranks()
+        # Get initial scans from DB with basic reward filter only
+        # (contractor/rank filtering done in _scan_matches_filters)
         scans = self.scan_db.query_scans(
             min_reward=filters.min_reward,
             max_reward=filters.max_reward,
-            ranks=allowed_ranks
+            ranks=None  # Rank filtering now per-contractor
         )
 
         logger.info(f"Initial query returned {len(scans)} scans")
 
-        # Apply additional filters
+        # Apply additional filters (location types, systems, contractor/rank)
         results = []
         for scan in scans:
             if self._scan_matches_filters(scan, filters):
@@ -330,6 +356,19 @@ class RouteFinderService:
 
         if not objectives:
             return False
+
+        # Check contractor and per-contractor rank filter
+        if filters.contractor_filters is not None:
+            contractor = mission_data.get("contracted_by", "")
+            if contractor not in filters.contractor_filters:
+                return False  # Contractor not in allowed list
+
+            # Check rank for this contractor
+            allowed_ranks = filters.contractor_filters[contractor].get_allowed_ranks()
+            if allowed_ranks is not None:
+                scan_rank = mission_data.get("rank")
+                if scan_rank and scan_rank not in allowed_ranks:
+                    return False
 
         # Get ship for capacity check
         ship = self.ship_manager.get_ship(filters.ship_key)
@@ -395,6 +434,7 @@ class RouteFinderService:
 
         # Filter missions
         matching_scans = self.filter_missions(filters)
+        self._last_pool_size = len(matching_scans)
 
         if not matching_scans:
             logger.info("No matching missions found")
